@@ -1,0 +1,209 @@
+#include "hud.h"
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+
+#include "pins.h"
+
+namespace {
+
+constexpr int kWidth = 128;
+constexpr int kHeight = 64;
+constexpr int kArrowHeadPx = 6;
+
+Adafruit_SSD1306 display(kWidth, kHeight, &Wire, -1);
+uint32_t scene_seq = 0;
+
+void frame_start() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+  display.setTextSize(1);
+}
+
+// Arrow tip at (x, y), pointing along angle (degrees, screen convention:
+// 0 = right, 90 = down). Shaft extends backward from the tip; the head is two
+// strokes swept 45 degrees either side of the reversed shaft direction.
+void draw_arrow(int x, int y, int angle_deg, int length) {
+  const float rad = angle_deg * DEG_TO_RAD;
+  const int tail_x = x - lroundf(cosf(rad) * length);
+  const int tail_y = y - lroundf(sinf(rad) * length);
+  display.drawLine(tail_x, tail_y, x, y, SSD1306_WHITE);
+  for (int side = -1; side <= 1; side += 2) {
+    const float head = (angle_deg + 180 + side * 45) * DEG_TO_RAD;
+    const int hx = x + lroundf(cosf(head) * kArrowHeadPx);
+    const int hy = y + lroundf(sinf(head) * kArrowHeadPx);
+    display.drawLine(x, y, hx, hy, SSD1306_WHITE);
+  }
+}
+
+// One V mark with its tip at (cx, cy) pointing along the axis-aligned
+// direction (dx, dy).
+void chevron_mark(int cx, int cy, int dx, int dy) {
+  if (dx != 0) {
+    display.drawLine(cx, cy, cx - 5 * dx, cy - 6, SSD1306_WHITE);
+    display.drawLine(cx, cy, cx - 5 * dx, cy + 6, SSD1306_WHITE);
+  } else {
+    display.drawLine(cx, cy, cx - 6, cy - 5 * dy, SSD1306_WHITE);
+    display.drawLine(cx, cy, cx + 6, cy - 5 * dy, SSD1306_WHITE);
+  }
+}
+
+// Double chevron hugging the given edge plus a short label beside it.
+void draw_chevron(const char* edge, const char* label) {
+  const int label_px = 6 * (int)strlen(label);
+  display.setTextSize(1);
+  if (strcmp(edge, "right") == 0) {
+    chevron_mark(126, 32, 1, 0);
+    chevron_mark(120, 32, 1, 0);
+    display.setCursor(max(0, 113 - label_px), 28);
+  } else if (strcmp(edge, "left") == 0) {
+    chevron_mark(1, 32, -1, 0);
+    chevron_mark(7, 32, -1, 0);
+    display.setCursor(15, 28);
+  } else if (strcmp(edge, "up") == 0) {
+    chevron_mark(64, 1, 0, -1);
+    chevron_mark(64, 7, 0, -1);
+    display.setCursor(max(0, 64 - label_px / 2), 14);
+  } else if (strcmp(edge, "down") == 0) {
+    chevron_mark(64, 62, 0, 1);
+    chevron_mark(64, 56, 0, 1);
+    display.setCursor(max(0, 64 - label_px / 2), 42);
+  } else {
+    return;
+  }
+  display.print(label);
+}
+
+void render_scene(JsonObject scene) {
+  frame_start();
+  JsonArray els = scene["els"].as<JsonArray>();
+  for (JsonObject el : els) {
+    const char* t = el["t"] | "";
+    if (strcmp(t, "text") == 0) {
+      display.setTextSize(el["size"] | 1);
+      display.setCursor(el["x"] | 0, el["y"] | 0);
+      display.print(el["text"] | "");
+    } else if (strcmp(t, "arrow") == 0) {
+      draw_arrow(el["x"] | 0, el["y"] | 0, el["angle"] | 225, el["length"] | 14);
+    } else if (strcmp(t, "chevron") == 0) {
+      draw_chevron(el["edge"] | "", el["label"] | "");
+    }
+  }
+  display.display();
+}
+
+}  // namespace
+
+bool hud_begin(bool mirrored) {
+  Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
+    return false;
+  }
+  if (mirrored) {
+    // The optical path has exactly one reflection, so the panel itself must
+    // draw mirrored: SEGREMAP without remap (0xA0) undoes the horizontal
+    // flip Adafruit's init applies; COMSCANDEC keeps the vertical direction.
+    display.ssd1306_command(SSD1306_SEGREMAP);
+    display.ssd1306_command(SSD1306_COMSCANDEC);
+  }
+  display.clearDisplay();
+  display.display();
+  return true;
+}
+
+void hud_splash(const char* version) {
+  frame_start();
+  display.setTextSize(2);
+  display.setCursor(10, 16);
+  display.print("lstk-eye");
+  display.setTextSize(1);
+  display.setCursor(10, 40);
+  display.print("fw ");
+  display.print(version);
+  display.display();
+}
+
+void hud_message(const char* line1, const char* line2) {
+  frame_start();
+  display.setCursor(0, 8);
+  display.print(line1);
+  display.setCursor(0, 24);
+  display.print(line2);
+  display.display();
+}
+
+void hud_rec(uint32_t seconds, bool capped) {
+  frame_start();
+  display.fillCircle(8, 12, 4, SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(18, 4);
+  display.print("REC");
+  display.setCursor(18, 28);
+  display.print(seconds);
+  display.print("s");
+  if (capped) {
+    display.setTextSize(1);
+    display.setCursor(0, 52);
+    display.print("max length reached");
+  }
+  display.display();
+}
+
+void hud_thinking() {
+  frame_start();
+  display.setTextSize(2);
+  display.setCursor(4, 24);
+  display.print("thinking..");
+  display.display();
+}
+
+void hud_error(const char* msg) {
+  frame_start();
+  display.setCursor(0, 8);
+  display.print("! error");
+  display.setTextWrap(true);
+  display.setCursor(0, 24);
+  display.print(msg);
+  display.display();
+}
+
+void hud_photo_count(int count) {
+  frame_start();
+  display.setTextSize(2);
+  display.setCursor(4, 20);
+  display.print("photo x");
+  display.print(count);
+  display.setTextSize(1);
+  display.setCursor(4, 44);
+  display.print("(offline count)");
+  display.display();
+}
+
+bool hud_apply_response(const String& body, bool* active_out, int* count_out) {
+  JsonDocument doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) {
+    return false;
+  }
+  if (active_out != nullptr && doc["active"].is<bool>()) {
+    *active_out = doc["active"].as<bool>();
+  }
+  if (count_out != nullptr && doc["count"].is<int>()) {
+    *count_out = doc["count"].as<int>();
+  }
+  JsonObject scene = doc["scene"];
+  if (!scene.isNull()) {
+    const uint32_t seq = scene["seq"] | 0;
+    if (seq != scene_seq) {
+      scene_seq = seq;
+      render_scene(scene);
+    }
+  }
+  return true;
+}
+
+uint32_t hud_scene_seq() {
+  return scene_seq;
+}
