@@ -17,7 +17,7 @@ A scene fully replaces whatever the device is currently showing ("replace"
 semantics). The device redraws only when ``seq`` changes.
 """
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -64,7 +64,7 @@ class ChevronEl(BaseModel):
     label: str = ""
 
 
-DisplayElement = Annotated[Union[TextEl, ArrowEl, ChevronEl], Field(discriminator="t")]
+DisplayElement = Annotated[TextEl | ArrowEl | ChevronEl, Field(discriminator="t")]
 
 
 class DisplayScene(BaseModel):
