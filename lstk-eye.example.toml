@@ -1,0 +1,49 @@
+# Example configuration. Copy to ./lstk-eye.toml (or ~/.config/lstk-eye/config.toml)
+# and edit. Every value can also be set via environment variables with the LSTK_
+# prefix and __ as the nesting delimiter, e.g. LSTK_PLANNER__MODEL=claude-opus-5.
+# CLI flags > environment > this file.
+
+# "real" uses the configured backends below; "mock" swaps every stage for a
+# mock (no ML models, no API key) and enables text asks for the simulator.
+profile = "real"
+
+[server]
+host = "0.0.0.0"
+port = 8321
+zeroconf = true          # advertise lstk-eye.local via mDNS for the glasses
+
+[stt]
+backend = "whisper"      # whisper | mock
+model = "small"          # faster-whisper size: tiny/base/small/medium
+language = ""            # empty = autodetect
+
+[segmenter]
+backend = "fastsam"      # fastsam | mock
+model = "FastSAM-s.pt"   # auto-downloaded on first use
+device = "cpu"           # cpu | mps | cuda
+max_masks = 25
+min_area = 0.0008
+
+[planner]
+backend = "anthropic"    # anthropic | claude-cli | mock
+model = "claude-opus-5"
+effort = "medium"        # low | medium | high - latency vs plan quality
+max_steps = 7
+
+[calibration]
+# Camera->display mapping, measured once at working distance (~60 cm):
+# display center shows camera point (center_x, center_y); the full panel spans
+# (window_w, window_h) of the camera frame.
+center_x = 0.5
+center_y = 0.5
+window_w = 0.40
+window_h = 0.40
+
+[reloc]
+appear_conf = 0.60       # show arrows fast
+disappear_conf = 0.45    # hide lazily (hysteresis)
+miss_hide = 4            # consecutive misses before arrows hide
+
+[storage]
+dir = "runs"
+save_sessions = true     # keep capture/marked/plan per request for debugging

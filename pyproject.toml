@@ -64,6 +64,10 @@ src = ["src", "tests"]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# typer's API is designed around function calls in argument defaults
+"src/lstk_eye/cli.py" = ["B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
