@@ -190,7 +190,9 @@ def doctor(
 
         checks.append(("stt: faster-whisper", True, "installed"))
     except ImportError:
-        checks.append(("stt: faster-whisper", False, 'pip install "lstk-eye[stt]" (or mock profile)'))
+        checks.append(
+            ("stt: faster-whisper", False, 'pip install "lstk-eye\\[stt]" (or mock profile)')
+        )
 
     try:
         import ultralytics  # noqa: F401
@@ -198,7 +200,7 @@ def doctor(
         checks.append(("segmenter: ultralytics", True, "installed"))
     except ImportError:
         checks.append(
-            ("segmenter: ultralytics", False, 'pip install "lstk-eye[seg]" (or mock profile)')
+            ("segmenter: ultralytics", False, 'pip install "lstk-eye\\[seg]" (or mock profile)')
         )
 
     has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))

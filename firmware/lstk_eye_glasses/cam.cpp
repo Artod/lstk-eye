@@ -10,6 +10,17 @@ namespace {
 OV5640 ov5640;
 framesize_t current_size = FRAMESIZE_XGA;
 
+int width_for(framesize_t size) {
+  switch (size) {
+    case FRAMESIZE_QVGA:
+      return 320;
+    case FRAMESIZE_XGA:
+      return 1024;
+    default:
+      return 0;
+  }
+}
+
 camera_fb_t* capture_at(framesize_t size) {
   sensor_t* s = esp_camera_sensor_get();
   if (s == nullptr) {
@@ -20,13 +31,24 @@ camera_fb_t* capture_at(framesize_t size) {
       return nullptr;
     }
     current_size = size;
-    // Discard one frame so the buffer we return is at the new size.
-    camera_fb_t* stale = esp_camera_fb_get();
-    if (stale != nullptr) {
-      esp_camera_fb_return(stale);
-    }
   }
-  return esp_camera_fb_get();
+  // With fb_count=2 + CAMERA_GRAB_LATEST the driver free-runs, so right after
+  // a size switch the queue can still hold frames at the OLD resolution (or
+  // one torn during sensor reconfig). Returning one of those would feed the
+  // planner a QVGA preview instead of the XGA photo. Flush until the frame
+  // actually matches the requested size.
+  const int want_w = width_for(size);
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == nullptr) {
+      return nullptr;
+    }
+    if (want_w == 0 || (int)fb->width == want_w) {
+      return fb;
+    }
+    esp_camera_fb_return(fb);
+  }
+  return nullptr;
 }
 
 }  // namespace

@@ -15,7 +15,7 @@ for its mock and allows text-based asks (no microphone needed).
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -44,9 +44,16 @@ class ServerConfig(BaseModel):
 class SttConfig(BaseModel):
     backend: Literal["whisper", "mock"] = "whisper"
     model: str = "small"  # faster-whisper model size
-    language: str | None = None  # None = autodetect
+    language: str | None = None  # None or "" = autodetect
     device: str = "auto"
     compute_type: str = "int8"
+
+    @field_validator("language")
+    @classmethod
+    def _empty_means_autodetect(cls, v: str | None) -> str | None:
+        # TOML has no null, so the natural way to spell "autodetect" in a
+        # config file is an empty string - which faster-whisper rejects.
+        return v or None
 
 
 class SegmenterConfig(BaseModel):
@@ -64,7 +71,9 @@ class PlannerConfig(BaseModel):
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     max_tokens: int = 8000
     max_steps: int = 7
-    timeout_s: float = 60.0
+    # Must stay below the firmware's blocking /ask timeout (30 s) so the
+    # device sees an error scene instead of timing out on its own.
+    timeout_s: float = 25.0
 
 
 class CalibrationConfig(BaseModel):

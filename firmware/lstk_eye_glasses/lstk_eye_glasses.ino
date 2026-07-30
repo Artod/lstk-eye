@@ -175,7 +175,13 @@ void loop() {
           hud_error("mic start failed");
         }
       }
-      if (state == ST_SESSION &&
+      // Previews are optional traffic: never start one while the button is
+      // held or a gesture is mid-flight, because the blocking POST would
+      // swallow the next edges (a double click would decay into a single
+      // click). This narrows, but does not close, the window where a click
+      // lands during an in-flight request; the full fix is moving HTTP to a
+      // worker task.
+      if (state == ST_SESSION && !buttons_busy() &&
           millis() - last_preview_ms >= PREVIEW_INTERVAL_MS) {
         last_preview_ms = millis();
         send_preview();

@@ -69,6 +69,7 @@ class DeviceSession:
         self.device_id = device_id
         self._rt = rt
         self._lock = threading.Lock()
+        self.last_access = time.monotonic()
         self._seq = 0
         self._photos: list[tuple[bytes, float]] = []
         self._scene: DisplayScene = rt.composer.status("ready", self._next_seq())
@@ -105,6 +106,11 @@ class DeviceSession:
             self._photos.append((jpeg, now))
             self._photos = self._photos[-MAX_PHOTOS:]
             count = len(self._photos)
+            if self.active:
+                # Scenes replace each other, and nothing would restore the
+                # slide afterwards - so mid-session captures are acknowledged
+                # in the count only, without touching the display.
+                return PhotoAck(count=count, scene=None)
             scene = self._set_scene(self._rt.composer.photo_count(count, self._next_seq()))
             return PhotoAck(count=count, scene=scene)
 
@@ -144,10 +150,14 @@ class DeviceSession:
         now = time.monotonic()
         fresh = [(b, t) for b, t in self._photos if now - t < PHOTO_TTL_S]
         if not fresh:
+            # active must reflect the real session state: a follow-up question
+            # without a fresh capture must not tell the device the session
+            # ended while the server keeps it alive ("repeat" restores the
+            # slide). See the protocol contract on the active flag.
             scene = self._set_scene(
                 self._rt.composer.status("no photo", self._next_seq(), "click to capture")
             )
-            return AskResponse(session_id=self.session_id, scene=scene, active=False)
+            return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
 
         capture_jpeg = fresh[-1][0]
         capture = _decode_bgr(capture_jpeg)
@@ -205,7 +215,13 @@ class DeviceSession:
         return SceneResponse(scene=None, active=self.active)
 
     def preview(self, jpeg: bytes, last_seq: int) -> SceneResponse:
-        with self._lock:
+        # Never queue behind a long-running ask: a preview that cannot get the
+        # lock is worthless by the time it would (2-3 fps stream), and blocked
+        # requests would pile up holding threadpool tokens, starving every
+        # other device. Drop the frame instead.
+        if not self._lock.acquire(blocking=False):
+            return SceneResponse(scene=None, active=self.active)
+        try:
             if not self.active:
                 return SceneResponse(scene=self._scene_if_newer(last_seq), active=False)
             if self._tracker is not None:
@@ -214,10 +230,18 @@ class DeviceSession:
                 except PipelineError:
                     log.debug("preview frame rejected", exc_info=True)
             return SceneResponse(scene=self._scene_if_newer(last_seq), active=True)
+        finally:
+            self._lock.release()
 
     def scene_since(self, last_seq: int) -> SceneResponse:
-        with self._lock:
+        # Same non-blocking policy as preview: polling must not convoy behind
+        # the pipeline.
+        if not self._lock.acquire(blocking=False):
+            return SceneResponse(scene=None, active=self.active)
+        try:
             return SceneResponse(scene=self._scene_if_newer(last_seq), active=self.active)
+        finally:
+            self._lock.release()
 
     # --- internals ---
 
@@ -266,9 +290,16 @@ class DeviceSession:
     def _finish(self, message: str) -> DisplayScene:
         self.active = False
         self._slides = []
+        self._mask_by_id = {}
         self._tracker = None
         self._capture_bgr = None
         return self._set_scene(self._rt.composer.status(message, self._next_seq()))
+
+
+# Session eviction: device_id is an unauthenticated query parameter, so the
+# session map must not grow without bound on a LAN-exposed server.
+MAX_DEVICES = 32
+IDLE_EVICT_S = 1800.0
 
 
 class SessionManager:
@@ -279,6 +310,22 @@ class SessionManager:
 
     def get(self, device_id: str) -> DeviceSession:
         with self._lock:
-            if device_id not in self._sessions:
-                self._sessions[device_id] = DeviceSession(device_id, self._rt)
-            return self._sessions[device_id]
+            now = time.monotonic()
+            session = self._sessions.get(device_id)
+            if session is None:
+                self._evict(now)
+                session = DeviceSession(device_id, self._rt)
+                self._sessions[device_id] = session
+            session.last_access = now
+            return session
+
+    def _evict(self, now: float) -> None:
+        for did, sess in list(self._sessions.items()):
+            if not sess.active and now - sess.last_access > IDLE_EVICT_S:
+                del self._sessions[did]
+        while len(self._sessions) >= MAX_DEVICES:
+            # Drop the least recently used session, preferring inactive ones.
+            candidates = sorted(
+                self._sessions.items(), key=lambda kv: (kv[1].active, kv[1].last_access)
+            )
+            del self._sessions[candidates[0][0]]

@@ -24,6 +24,27 @@ from lstk_eye.protocol.messages import (
 )
 from lstk_eye.session import Runtime, SessionManager
 
+# Hard caps on request bodies: the server is reachable by anything on the
+# LAN, and every body is buffered in RAM. Real payloads are far smaller
+# (XGA JPEG ~150 KB, QVGA preview ~15 KB, 20 s WAV ~640 KB).
+MAX_PHOTO_BYTES = 8_000_000
+MAX_PREVIEW_BYTES = 2_000_000
+MAX_AUDIO_BYTES = 4_000_000
+
+
+async def _read_capped(request: Request, limit: int) -> bytes:
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail="body too large")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 def create_app(cfg: AppConfig | None = None) -> FastAPI:
     if cfg is None:
@@ -51,7 +72,7 @@ def create_app(cfg: AppConfig | None = None) -> FastAPI:
 
     @app.post("/api/v1/photos", response_model=PhotoAck)
     async def photos(request: Request, device_id: str = Query("glasses")) -> PhotoAck:
-        body = await request.body()
+        body = await _read_capped(request, MAX_PHOTO_BYTES)
         if not body:
             raise HTTPException(status_code=400, detail="empty photo body")
         return await run_in_threadpool(sessions.get(device_id).add_photo, body)
@@ -67,7 +88,7 @@ def create_app(cfg: AppConfig | None = None) -> FastAPI:
                 status_code=403,
                 detail="text asks are disabled (set debug.allow_text_ask or use --profile mock)",
             )
-        body = await request.body()
+        body = await _read_capped(request, MAX_AUDIO_BYTES)
         if text is None and not body:
             raise HTTPException(status_code=400, detail="empty audio body")
         return await run_in_threadpool(sessions.get(device_id).ask, body, text)
@@ -82,7 +103,7 @@ def create_app(cfg: AppConfig | None = None) -> FastAPI:
         device_id: str = Query("glasses"),
         last_seq: int = Query(-1),
     ) -> SceneResponse:
-        body = await request.body()
+        body = await _read_capped(request, MAX_PREVIEW_BYTES)
         if not body:
             raise HTTPException(status_code=400, detail="empty preview body")
         return await run_in_threadpool(sessions.get(device_id).preview, body, last_seq)

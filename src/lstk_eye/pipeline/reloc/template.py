@@ -46,7 +46,11 @@ class TemplateTracker(TargetTracker):
         # Normalized (w, h) of the template region on its source frame; used
         # to compute the template's expected pixel size on any preview frame.
         self._norm_w, self._norm_h = norm_size
-        self._visible = False
+        # The tracker is constructed from a frame where the target is known
+        # present, so the debounced state starts visible: hiding must cost
+        # miss_hide consecutive misses even on the very first preview frames
+        # (which are often motion-blurred right after the button release).
+        self._visible = True
         self._misses = 0
         self._center: tuple[float, float] | None = None
 

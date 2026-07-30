@@ -17,6 +17,11 @@ Adafruit_SSD1306 display(kWidth, kHeight, &Wire, -1);
 uint32_t scene_seq = 0;
 
 void frame_start() {
+  // Every draw invalidates the last applied server scene: local screens
+  // (errors, WiFi status, REC) clobber the panel, and the seq gate in
+  // hud_apply_response must not suppress the redraw that restores it.
+  // render_scene re-sets scene_seq after drawing.
+  scene_seq = 0;
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setTextWrap(false);
@@ -197,8 +202,10 @@ bool hud_apply_response(const String& body, bool* active_out, int* count_out) {
   if (!scene.isNull()) {
     const uint32_t seq = scene["seq"] | 0;
     if (seq != scene_seq) {
-      scene_seq = seq;
+      // render_scene's frame_start zeroes scene_seq; record the new seq after
+      // drawing so the invalidation logic stays in one place.
       render_scene(scene);
+      scene_seq = seq;
     }
   }
   return true;

@@ -4,6 +4,8 @@ Imported lazily by the factory; a missing ultralytics install surfaces there
 as DependencyError with the install hint.
 """
 
+import threading
+
 import cv2
 import numpy as np
 from ultralytics import FastSAM
@@ -21,12 +23,17 @@ class FastSAMSegmenter(Segmenter):
     def __init__(self, cfg: SegmenterConfig):
         self._cfg = cfg
         self._model: FastSAM | None = None
+        # The stage instance is shared across devices; guard the lazy init so
+        # two first calls racing in the threadpool cannot load the model twice.
+        self._init_lock = threading.Lock()
 
     def segment(self, image_bgr: np.ndarray) -> list[SegMask]:
         if self._model is None:
             # Deferred so constructing the pipeline stays cheap; the first
             # segment() call pays for the model load (and download).
-            self._model = FastSAM(self._cfg.model)
+            with self._init_lock:
+                if self._model is None:
+                    self._model = FastSAM(self._cfg.model)
 
         results = self._model(
             image_bgr,

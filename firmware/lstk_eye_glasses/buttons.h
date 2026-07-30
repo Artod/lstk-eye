@@ -19,3 +19,8 @@ void buttons_begin(uint8_t pin);
 
 // Call every loop() iteration. Returns at most one event per call.
 ButtonEvent buttons_poll();
+
+// True while the button is held or a gesture is mid-flight (e.g. inside the
+// double-click gap). Blocking work started in that window would swallow
+// gesture edges, so callers defer optional network calls while busy.
+bool buttons_busy();

@@ -32,4 +32,6 @@
 // its own, longer budget.
 #define WIFI_TIMEOUT_MS 20000
 #define HTTP_TIMEOUT_MS 5000
-#define HTTP_TIMEOUT_ASK_MS 20000
+// Must stay above the server planner timeout (25 s default) so the device
+// receives the error scene instead of timing out first.
+#define HTTP_TIMEOUT_ASK_MS 30000

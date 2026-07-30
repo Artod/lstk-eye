@@ -84,7 +84,7 @@ explicitly.
 | `planner.effort` | `LSTK_PLANNER__EFFORT` | `medium` | `low`/`medium`/`high`/`xhigh`/`max` |
 | `planner.max_tokens` | `LSTK_PLANNER__MAX_TOKENS` | `8000` | response token cap |
 | `planner.max_steps` | `LSTK_PLANNER__MAX_STEPS` | `7` | max slides per plan |
-| `planner.timeout_s` | `LSTK_PLANNER__TIMEOUT_S` | `60.0` | API timeout |
+| `planner.timeout_s` | `LSTK_PLANNER__TIMEOUT_S` | `25.0` | API timeout (must stay below the firmware's 30 s /ask timeout) |
 | `calibration.center_x` | `LSTK_CALIBRATION__CENTER_X` | `0.5` | camera point shown at display center |
 | `calibration.center_y` | `LSTK_CALIBRATION__CENTER_Y` | `0.5` | camera point shown at display center |
 | `calibration.window_w` | `LSTK_CALIBRATION__WINDOW_W` | `0.40` | fraction of frame width the panel spans |

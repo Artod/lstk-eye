@@ -87,3 +87,7 @@ ButtonEvent buttons_poll() {
   }
   return BTN_NONE;
 }
+
+bool buttons_busy() {
+  return stable_pressed || gstate != G_IDLE;
+}

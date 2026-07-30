@@ -142,7 +142,10 @@ def test_reappear_is_immediate(cfg, rng):
 def test_center_none_until_first_confident_match(cfg, rng):
     tracker = _new_tracker(cfg, rng)
     res = tracker.update(_background(PREVIEW_W, PREVIEW_H, rng))
-    assert not res.found
+    # The tracker starts visible (it was built from a frame containing the
+    # target), so one weak frame only spends miss budget - but no position is
+    # known yet.
+    assert res.found
     assert res.center is None
     res = tracker.update(_preview((0.5, 0.5), rng))
     assert res.center is not None
