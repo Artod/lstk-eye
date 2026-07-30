@@ -1,0 +1,34 @@
+# --- internal / never published ---
+CLAUDE.md
+docs/internal/
+notes/
+sandbox/
+*.internal.md
+
+# --- secrets & local config ---
+.env
+*.local.toml
+firmware/*/device_config.h
+
+# --- python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- runtime artifacts ---
+runs/
+*.pt
+*.onnx
+models/
+
+# --- arduino build ---
+firmware/**/build/
+
+# --- os ---
+.DS_Store
