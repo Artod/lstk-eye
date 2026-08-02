@@ -13,6 +13,21 @@ import numpy as np
 _DICT = cv2.aruco.DICT_4X4_50
 MARKER_ID = 0
 
+# Detection accepts markers from the families people actually end up
+# displaying: users grab "a calibration marker" from whatever generator they
+# find, and AprilTag/other-ArUco images look identical to the naked eye.
+# Any marker id is accepted - only the fiducial's center matters.
+_ACCEPTED_DICTS = (
+    cv2.aruco.DICT_4X4_50,
+    cv2.aruco.DICT_4X4_1000,
+    cv2.aruco.DICT_5X5_1000,
+    cv2.aruco.DICT_6X6_1000,
+    cv2.aruco.DICT_7X7_1000,
+    cv2.aruco.DICT_ARUCO_ORIGINAL,
+    cv2.aruco.DICT_APRILTAG_16H5,
+    cv2.aruco.DICT_APRILTAG_36H11,
+)
+
 
 def generate_target(path: str | Path, size: int = 900) -> Path:
     """Write the calibration target PNG: the marker with a generous white
@@ -30,6 +45,26 @@ def generate_target(path: str | Path, size: int = 900) -> Path:
     return path
 
 
+def _detect_any(gray: np.ndarray) -> np.ndarray | None:
+    """Largest fiducial quad (pixel corners) from any accepted family."""
+    best: np.ndarray | None = None
+    best_side = 0.0
+    params = cv2.aruco.DetectorParameters()
+    for dict_id in _ACCEPTED_DICTS:
+        detector = cv2.aruco.ArucoDetector(
+            cv2.aruco.getPredefinedDictionary(dict_id), params
+        )
+        corners, ids, _ = detector.detectMarkers(gray)
+        if ids is None:
+            continue
+        for marker_corners in corners:
+            quad = marker_corners.reshape(-1, 2)
+            side = float(max(np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)))
+            if side > best_side:
+                best, best_side = quad, side
+    return best
+
+
 def detect_target(
     image_bgr: np.ndarray,
 ) -> tuple[tuple[float, float], float, np.ndarray] | None:
@@ -37,22 +72,22 @@ def detect_target(
 
     ``size`` is the longest quad side as a fraction of the frame width - the
     calibration flow uses it to tell "marker too small / too far" apart from
-    "marker not in view". Returns None when the marker is not detected."""
+    "marker not in view". Returns None when no marker is detected.
+
+    Small markers (a few dozen pixels) fall below the detectors' native
+    working range, so a miss retries on a 2x upscale before giving up."""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
-    detector = cv2.aruco.ArucoDetector(
-        cv2.aruco.getPredefinedDictionary(_DICT), cv2.aruco.DetectorParameters()
-    )
-    corners, ids, _ = detector.detectMarkers(gray)
-    if ids is None:
-        return None
     h, w = gray.shape[:2]
-    for marker_corners, marker_id in zip(corners, ids.flatten(), strict=True):
-        if marker_id == MARKER_ID:
-            quad = marker_corners.reshape(-1, 2)
-            center = quad.mean(axis=0)
-            side = float(max(np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)))
-            return ((float(center[0]) / w, float(center[1]) / h), side / w, quad)
-    return None
+    quad = _detect_any(gray)
+    if quad is None:
+        doubled = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+        quad = _detect_any(doubled)
+        if quad is None:
+            return None
+        quad = quad / 2.0
+    center = quad.mean(axis=0)
+    side = float(max(np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)))
+    return ((float(center[0]) / w, float(center[1]) / h), side / w, quad)
 
 
 def detect_target_center(image_bgr: np.ndarray) -> tuple[float, float] | None:

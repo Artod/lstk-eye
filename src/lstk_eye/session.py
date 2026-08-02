@@ -56,9 +56,12 @@ MAX_HISTORY = 12
 # A photo whose decoded width is below this is not a capture (preview-sized
 # frames must never reach the planner).
 MIN_PHOTO_WIDTH = 600
-# Calibration marker acceptance: minimum apparent size (fraction of frame
-# width) and distance from the frame border.
-CALIB_MIN_MARKER = 0.06
+# Calibration marker acceptance: apparent size window (fraction of frame
+# width) and distance from the frame border. The lower bound sits just above
+# the detector's reliable floor; the upper bound rejects "marker fills the
+# frame" setups where aiming precision collapses.
+CALIB_MIN_MARKER = 0.045
+CALIB_MAX_MARKER = 0.35
 CALIB_EDGE_MARGIN = 0.06
 
 
@@ -80,6 +83,8 @@ def _marker_status(found) -> tuple[str, bool]:
     (cx, cy), size, _ = found
     if size < CALIB_MIN_MARKER:
         return "closer to marker", False
+    if size > CALIB_MAX_MARKER:
+        return "further from marker", False
     if not (
         CALIB_EDGE_MARGIN < cx < 1 - CALIB_EDGE_MARGIN
         and CALIB_EDGE_MARGIN < cy < 1 - CALIB_EDGE_MARGIN
@@ -102,10 +107,25 @@ class Runtime:
         self.store = RunStore(cfg.storage)
 
 
-def _decode_bgr(jpeg: bytes) -> np.ndarray:
-    img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+_ROTATE_CODES = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
+
+def _decode(jpeg: bytes, rotation: int, gray: bool = False) -> np.ndarray:
+    """Decode a device frame and normalize it upright per camera.rotation.
+
+    Every frame - capture or preview, chat or calibration - passes through
+    here, so downstream code (segmentation, tracking, calibration, display
+    mapping) always works in upright coordinates."""
+    flags = cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR
+    img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), flags)
     if img is None:
         raise PipelineError("could not decode image")
+    if rotation:
+        img = cv2.rotate(img, _ROTATE_CODES[rotation])
     return img
 
 
@@ -135,6 +155,9 @@ class DeviceSession:
         self._history: list[tuple[str, str]] = []
         self._calib: _CalibState | None = None
 
+    def _decode(self, jpeg: bytes, gray: bool = False) -> np.ndarray:
+        return _decode(jpeg, self._rt.cfg.camera.rotation, gray=gray)
+
     # --- scene bookkeeping ---
 
     def _next_seq(self) -> int:
@@ -158,8 +181,8 @@ class DeviceSession:
             # never become the capture the planner sees (the camera can emit
             # a stale low-res frame right after a resolution switch).
             try:
-                frame = _decode_bgr(jpeg)
-                width_ok = frame.shape[1] >= MIN_PHOTO_WIDTH
+                frame = self._decode(jpeg)
+                width_ok = max(frame.shape[:2]) >= MIN_PHOTO_WIDTH
             except PipelineError:
                 width_ok = False
             if not width_ok:
@@ -234,10 +257,20 @@ class DeviceSession:
         # state; a voice command during calibration cancels it.
         if is_calibration_request(question):
             return self._start_calibration()
-        if self._calib is not None and match_intent(question) in ("cancel", "reset"):
-            self._calib = None
-            scene = self._set_scene(self._rt.composer.status("calibration off", self._next_seq()))
-            return AskResponse(session_id=self.session_id, scene=scene, active=False)
+        if self._calib is not None:
+            if match_intent(question) in ("cancel", "reset"):
+                self._calib = None
+                scene = self._set_scene(
+                    self._rt.composer.status("calibration off", self._next_seq())
+                )
+                return AskResponse(session_id=self.session_id, scene=scene, active=False)
+            # Any other utterance mid-calibration: stay in the flow and say
+            # how to leave it - never run the chat pipeline from here.
+            return AskResponse(
+                session_id=self.session_id,
+                scene=self._crosshair("busy: 2click exits"),
+                active=True,
+            )
 
         # Voice commands during an active session ("back", "repeat", "cancel")
         # never start a new pipeline run.
@@ -247,6 +280,12 @@ class DeviceSession:
                 resp = self._event_locked(intent)
                 scene = resp.scene if resp.scene is not None else self._scene
                 return AskResponse(session_id=self.session_id, scene=scene, active=resp.active)
+
+        if not self.active and match_intent(question) is not None:
+            scene = self._set_scene(
+                self._rt.composer.status("no session", self._next_seq(), "hold btn + ask")
+            )
+            return AskResponse(session_id=self.session_id, scene=scene, active=False)
 
         now = time.monotonic()
         fresh = [(b, t) for b, t in self._photos if now - t < PHOTO_TTL_S]
@@ -261,7 +300,7 @@ class DeviceSession:
             return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
 
         capture_jpeg = fresh[-1][0]
-        capture = _decode_bgr(capture_jpeg)
+        capture = self._decode(capture_jpeg)
 
         masks = self._rt.segmenter.segment(capture)
         marked = overlay_marks(capture, masks)
@@ -400,9 +439,7 @@ class DeviceSession:
         )
 
     def _update_anchor(self, jpeg: bytes) -> None:
-        frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-        if frame is None:
-            raise PipelineError("could not decode preview frame")
+        frame = self._decode(jpeg, gray=True)
         assert self._tracker is not None
         res = self._tracker.update(frame)
         new_anchor = res.center if res.found and res.center is not None else self._anchor
@@ -465,9 +502,7 @@ class DeviceSession:
         only when the feedback actually changes."""
         calib = self._calib
         assert calib is not None
-        frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
-        if frame is None:
-            raise PipelineError("could not decode preview frame")
+        frame = self._decode(jpeg, gray=True)
         status, _ = _marker_status(detect_target(frame))
         if status != calib.status:
             self._crosshair(status)
@@ -477,7 +512,7 @@ class DeviceSession:
         assert calib is not None
 
         try:
-            frame = _decode_bgr(jpeg)
+            frame = self._decode(jpeg)
         except PipelineError:
             return self._crosshair("bad photo - again")
         found = detect_target(frame)

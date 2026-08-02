@@ -15,8 +15,12 @@ from lstk_eye.testimage import make_test_image
 
 @pytest.fixture()
 def cfg(tmp_path):
+    # Hermetic config: pin an explicit (empty) TOML so a developer's local
+    # ./lstk-eye.toml (pads, camera rotation) can never leak into tests.
+    cfg_file = tmp_path / "lstk-eye.toml"
+    cfg_file.write_text("")
     return load_config(
-        None,
+        cfg_file,
         profile="mock",
         storage={"dir": str(tmp_path / "runs")},
         server={"zeroconf": False},

@@ -56,6 +56,15 @@ class SttConfig(BaseModel):
         return v or None
 
 
+class CameraConfig(BaseModel):
+    """Physical camera mount. ``rotation`` is how many degrees CLOCKWISE the
+    incoming frames must be rotated to become upright - set it when the
+    module is mounted sideways. Applied to every photo and preview at
+    ingestion, so the whole pipeline works in upright coordinates."""
+
+    rotation: Literal[0, 90, 180, 270] = 0
+
+
 class SegmenterConfig(BaseModel):
     backend: Literal["fastsam", "mock"] = "fastsam"
     model: str = "FastSAM-s.pt"  # auto-downloaded by ultralytics
@@ -131,6 +140,7 @@ class AppConfig(BaseSettings):
     # persist to); set by load_config, used by calibration to save results.
     config_path: Path | None = None
     server: ServerConfig = Field(default_factory=ServerConfig)
+    camera: CameraConfig = Field(default_factory=CameraConfig)
     stt: SttConfig = Field(default_factory=SttConfig)
     segmenter: SegmenterConfig = Field(default_factory=SegmenterConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)

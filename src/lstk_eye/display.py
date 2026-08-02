@@ -194,7 +194,9 @@ class SceneComposer:
         else:
             instr_y, status_row = self.y0, self.y0 + LINE_H
         els: list[DisplayElement] = [
-            TargetEl(x=px[0], y=px[1], r=5),
+            # Sized so a phone-displayed marker at working distance fills the
+            # brackets: the alignment semantic is "fit the marker inside".
+            TargetEl(x=px[0], y=px[1], r=16),
             TextEl(x=self.x0, y=instr_y, text=instruction),
         ]
         if status:

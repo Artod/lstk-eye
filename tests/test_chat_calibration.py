@@ -13,12 +13,15 @@ from lstk_eye.testimage import make_test_image
 
 @pytest.fixture()
 def cfg(tmp_path):
+    # Hermetic config: pin an explicit (empty) TOML so a developer's local
+    # ./lstk-eye.toml (pads, camera rotation) can never leak into tests.
+    cfg_file = tmp_path / "lstk-eye.toml"
+    cfg_file.write_text("")
     return load_config(
-        None,
+        cfg_file,
         profile="mock",
         storage={"dir": str(tmp_path / "runs")},
         server={"zeroconf": False},
-        config_path=str(tmp_path / "lstk-eye.toml"),
     )
 
 
@@ -189,7 +192,7 @@ def test_calibration_rejects_small_and_edge_markers(rig):
     glasses, app = rig
     glasses.ask(text="calibrate")
 
-    tiny = glasses.capture(_frame_with_marker(0.5, 0.5, size=30))  # 30/640 < 0.06
+    tiny = glasses.capture(_frame_with_marker(0.5, 0.5, size=20))  # 20/640 < 0.045
     assert any("closer" in t for t in _texts(tiny.scene))
     assert _session(app)._calib.idx == 0, "rejected click must not advance"
 
@@ -232,3 +235,72 @@ def test_error_scene_names_the_exit(rig, cfg):
     comp_scene = _make(cfg).state.runtime.composer.error("boom", seq=1)
     texts = [e.text for e in comp_scene.els if e.t == "text"]
     assert any("2click = reset" in t for t in texts)
+
+
+def test_question_during_calibration_never_runs_pipeline(rig):
+    glasses, app = rig
+    called = []
+    planner = app.state.runtime.planner
+    original = planner.plan
+    planner.plan = lambda *a, **k: (called.append(1), original(*a, **k))[1]
+
+    glasses.ask(text="calibrate")
+    resp = glasses.ask(text="почему калибровка не работает")
+    assert resp.active, "calibration must survive an unrelated question"
+    assert not called, "the chat pipeline must not run during calibration"
+    assert any("2click" in t for t in _texts(resp.scene))
+    assert _session(app)._calib is not None
+
+
+def test_idle_voice_intent_gets_a_pointer(rig):
+    glasses, _ = rig
+    resp = glasses.ask(text="repeat")
+    assert not resp.active
+    texts = _texts(resp.scene)
+    assert any("no session" in t for t in texts)
+    assert any("hold btn" in t for t in texts)
+
+
+def test_camera_rotation_normalizes_frames(tmp_path):
+    cfg_file = tmp_path / "lstk-eye.toml"
+    cfg_file.write_text("")
+    cfg = load_config(
+        cfg_file,
+        profile="mock",
+        storage={"dir": str(tmp_path / "runs")},
+        server={"zeroconf": False},
+        camera={"rotation": 270},
+    )
+    app = create_app(cfg)
+    glasses = SimulatedGlasses(base_url="http://test", transport=httpx.ASGITransport(app=app))
+
+    glasses.ask(text="calibrate")
+    upright = _frame_with_marker(0.70, 0.50)
+    # A camera mounted 90 deg CCW delivers the upright scene rotated CW; the
+    # server's rotation=270 must undo that before detection.
+    delivered = cv2.rotate(upright, cv2.ROTATE_90_CLOCKWISE)
+    ack = glasses.capture(delivered)
+    sess = app.state.sessions.get("sim")
+    assert sess._calib.idx == 1, _texts(ack.scene)
+    (cx, cy), _ = sess._calib.pairs[0][0], sess._calib.pairs[0][1]
+    assert abs(cx - 0.70) < 0.03 and abs(cy - 0.50) < 0.03
+
+
+def test_foreign_marker_families_accepted(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    frame = np.full((480, 640, 3), 255, dtype=np.uint8)
+    tag = cv2.aruco.generateImageMarker(
+        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_16H5), 0, 120
+    )
+    frame[180:300, 260:380] = cv2.cvtColor(tag, cv2.COLOR_GRAY2BGR)
+    glasses.capture(frame)
+    assert app.state.sessions.get("sim")._calib.idx == 1, "AprilTag must be accepted"
+
+
+def test_too_close_marker_rejected(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    huge = glasses.capture(_frame_with_marker(0.5, 0.5, size=260))  # 260/640 > 0.35
+    assert any("further" in t for t in _texts(huge.scene))
+    assert _session(app)._calib.idx == 0
