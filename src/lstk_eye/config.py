@@ -76,6 +76,16 @@ class PlannerConfig(BaseModel):
     timeout_s: float = 25.0
 
 
+class DisplayConfig(BaseModel):
+    """Usable area of the panel. The optics crop the panel edges, so all
+    content is laid out inside [pad_x, 127-pad_x] x [pad_y, 63-pad_y].
+    Tune to the physical build: shrink pads until content reaches the visible
+    border, grow until nothing is cut off."""
+
+    pad_x: int = 16
+    pad_y: int = 2
+
+
 class CalibrationConfig(BaseModel):
     """Camera->display mapping, measured at working distance (~60 cm).
 
@@ -121,6 +131,7 @@ class AppConfig(BaseSettings):
     stt: SttConfig = Field(default_factory=SttConfig)
     segmenter: SegmenterConfig = Field(default_factory=SegmenterConfig)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
+    display: DisplayConfig = Field(default_factory=DisplayConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     reloc: RelocConfig = Field(default_factory=RelocConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)

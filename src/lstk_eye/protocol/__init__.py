@@ -11,6 +11,7 @@ from lstk_eye.protocol.messages import (
     HealthResponse,
     PhotoAck,
     SceneResponse,
+    TargetEl,
     TextEl,
 )
 
@@ -27,5 +28,6 @@ __all__ = [
     "HealthResponse",
     "PhotoAck",
     "SceneResponse",
+    "TargetEl",
     "TextEl",
 ]

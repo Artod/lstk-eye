@@ -1,8 +1,10 @@
 """Deterministic planner for tests and the ``mock`` profile.
 
-Ignores the image and the question entirely; anchors canned multimeter-style
-labels to the largest marks so downstream stages always receive a stable,
-valid plan without any API call.
+Ignores the image entirely; the question only selects the plan shape.
+Find-this questions ("find my phone", "найди телефон") return a single
+anchored step - the shape the session renders as an object highlight -
+while everything else gets canned multimeter-style instruction steps on the
+largest marks. No API calls, always a stable, valid plan.
 """
 
 from lstk_eye.pipeline.interfaces import Planner
@@ -10,6 +12,7 @@ from lstk_eye.pipeline.types import Plan, PlanStep, SegMask
 
 _LABELS = ("Red probe here", "Black probe here", "Set dial to V= 20")
 _SUMMARY = "mock plan"
+_LOCATE_WORDS = ("find", "locate", "where", "show me", "найди", "найти", "где", "покажи")
 
 
 class MockPlanner(Planner):
@@ -20,6 +23,12 @@ class MockPlanner(Planner):
                 summary=_SUMMARY,
             )
         largest = sorted(marks, key=lambda m: m.area, reverse=True)
+        q = question.lower()
+        if any(w in q for w in _LOCATE_WORDS):
+            return Plan(
+                steps=[PlanStep(label="Here", mark_id=largest[0].mark_id)],
+                summary=_SUMMARY,
+            )
         steps = [
             PlanStep(label=label, mark_id=mask.mark_id)
             for mask, label in zip(largest, _LABELS, strict=False)

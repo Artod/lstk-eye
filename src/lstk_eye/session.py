@@ -53,7 +53,7 @@ class Runtime:
         self.planner = factories.create_planner(cfg)
         self.reloc = factories.create_relocalizer(cfg)
         self.calibration = WindowCalibration(cfg.calibration)
-        self.composer = SceneComposer(self.calibration)
+        self.composer = SceneComposer(self.calibration, cfg.display)
         self.store = RunStore(cfg.storage)
 
 
@@ -83,6 +83,9 @@ class DeviceSession:
         self._tracker: TargetTracker | None = None
         self._anchored = False
         self._anchor: tuple[float, float] | None = None
+        # "target" for find-this sessions (a single anchored step renders as
+        # highlight brackets); "arrow" for multi-step instructions.
+        self._style = "arrow"  # type: str
 
     # --- scene bookkeeping ---
 
@@ -175,6 +178,9 @@ class DeviceSession:
                 label=step.label,
                 anchor=(mask_by_id[step.mark_id].centroid if step.mark_id in mask_by_id else None),
                 mark_id=step.mark_id if step.mark_id in mask_by_id else None,
+                size=(
+                    mask_by_id[step.mark_id].bbox[2:4] if step.mark_id in mask_by_id else None
+                ),
             )
             for i, step in enumerate(plan.steps)
         ]
@@ -182,6 +188,9 @@ class DeviceSession:
         self.session_id = uuid.uuid4().hex[:8]
         self.active = True
         self._slides = slides
+        self._style = (
+            "target" if len(slides) == 1 and slides[0].anchor is not None else "arrow"
+        )
         self._mask_by_id = mask_by_id
         self._capture_bgr = capture
         self._photos = []
@@ -207,7 +216,9 @@ class DeviceSession:
         if event_type == "repeat":
             slide = self._slides[self._step]
             scene = self._set_scene(
-                self._rt.composer.slide(slide, self._next_seq(), self._anchored, self._anchor)
+                self._rt.composer.slide(
+                    slide, self._next_seq(), self._anchored, self._anchor, style=self._style
+                )
             )
             return SceneResponse(scene=scene, active=True)
         if event_type == "cancel":
@@ -262,7 +273,9 @@ class DeviceSession:
             except Exception:
                 log.warning("relocalizer setup failed for step %d", index, exc_info=True)
         return self._set_scene(
-            self._rt.composer.slide(slide, self._next_seq(), self._anchored, self._anchor)
+            self._rt.composer.slide(
+                slide, self._next_seq(), self._anchored, self._anchor, style=self._style
+            )
         )
 
     def _update_anchor(self, jpeg: bytes) -> None:
@@ -284,7 +297,9 @@ class DeviceSession:
             self._anchor = new_anchor
             slide = self._slides[self._step]
             self._set_scene(
-                self._rt.composer.slide(slide, self._next_seq(), self._anchored, self._anchor)
+                self._rt.composer.slide(
+                    slide, self._next_seq(), self._anchored, self._anchor, style=self._style
+                )
             )
 
     def _finish(self, message: str) -> DisplayScene:

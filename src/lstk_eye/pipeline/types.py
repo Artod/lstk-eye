@@ -60,13 +60,16 @@ class Plan:
 @dataclass
 class Slide:
     """A plan step resolved against the capture frame: anchor is the mask
-    centroid in normalized camera coordinates, or None for text-only steps."""
+    centroid in normalized camera coordinates, or None for text-only steps.
+    ``size`` is the normalized (w, h) of the target's bbox, used to scale the
+    highlight brackets in find-this sessions."""
 
     index: int  # 0-based
     total: int
     label: str
     anchor: tuple[float, float] | None = None
     mark_id: int | None = None
+    size: tuple[float, float] | None = None
 
 
 @dataclass

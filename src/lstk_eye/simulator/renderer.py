@@ -19,6 +19,7 @@ from lstk_eye.protocol import (
     ArrowEl,
     ChevronEl,
     DisplayScene,
+    TargetEl,
     TextEl,
 )
 
@@ -71,10 +72,22 @@ def _draw_arrow(draw: ImageDraw.ImageDraw, el: ArrowEl) -> None:
         draw.line([tip, end], fill=255)
 
 
+def _draw_target(draw: ImageDraw.ImageDraw, el: TargetEl) -> None:
+    """Four corner brackets framing a square of half-size r around (x, y)."""
+    arm = max(3, el.r // 2)
+    x0, y0 = el.x - el.r, el.y - el.r
+    x1, y1 = el.x + el.r, el.y + el.r
+    for cx, cy, ax, ay in ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)):
+        draw.line([(cx, cy), (cx + ax * arm, cy)], fill=255)
+        draw.line([(cx, cy), (cx, cy + ay * arm)], fill=255)
+
+
 def _draw_chevron(draw: ImageDraw.ImageDraw, el: ChevronEl) -> None:
     dx, dy = _EDGE_DIR[el.edge]
     px, py = -dy, dx  # perpendicular, along the edge
-    cx, cy = _EDGE_CENTER[el.edge]
+    # Explicit tip position wins (the server insets it when the optics crop
+    # the panel); -1/-1 falls back to the physical edge.
+    cx, cy = (el.x, el.y) if el.x >= 0 and el.y >= 0 else _EDGE_CENTER[el.edge]
     # Two nested angle marks (">>") pointing outward, apexes 5 px apart.
     for i in range(2):
         ax = cx - i * _CHEVRON_STEP * dx
@@ -114,6 +127,8 @@ def render_scene(scene: DisplayScene, scale: int = 4) -> Image.Image:
             _draw_arrow(draw, el)
         elif isinstance(el, ChevronEl):
             _draw_chevron(draw, el)
+        elif isinstance(el, TargetEl):
+            _draw_target(draw, el)
     if scale != 1:
         img = img.resize((DISPLAY_W * scale, DISPLAY_H * scale), Image.Resampling.NEAREST)
     return img

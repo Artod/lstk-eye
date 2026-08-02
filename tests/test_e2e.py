@@ -119,3 +119,16 @@ async def test_text_ask_forbidden_without_debug_flag(cfg):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.post("/api/v1/ask", params={"text": "hi"}, content=b"")
         assert r.status_code == 403
+
+
+def test_find_mode_highlights_object(glasses):
+    """A find-this question produces a single-step session rendered as an
+    object highlight (target brackets), and 'next' ends it."""
+    glasses.capture(make_test_image())
+    resp = glasses.ask(text="find the phone on the desk")
+    assert resp.active
+    kinds = {e.t for e in resp.scene.els}
+    assert "target" in kinds
+    assert not any("/" in e.text for e in resp.scene.els if e.t == "text")
+    done = glasses.next()
+    assert not done.active

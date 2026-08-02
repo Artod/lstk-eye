@@ -56,15 +56,31 @@ class ArrowEl(BaseModel):
 
 
 class ChevronEl(BaseModel):
-    """An edge indicator for a target outside the display window: a double
-    chevron hugging ``edge`` with an optional short label next to it."""
+    """A compass indicator for a target outside the display window: a double
+    chevron pointing along ``edge`` with an optional short label next to it.
+
+    ``x, y`` position the chevron tip; -1 (the default) lets the device place
+    it at the physical panel edge. The server sets explicit coordinates when
+    the optics crop the panel and the visible area is inset."""
 
     t: Literal["chevron"] = "chevron"
     edge: Literal["left", "right", "up", "down"]
     label: str = ""
+    x: int = -1
+    y: int = -1
 
 
-DisplayElement = Annotated[TextEl | ArrowEl | ChevronEl, Field(discriminator="t")]
+class TargetEl(BaseModel):
+    """Object highlight: four corner brackets framing a square of half-size
+    ``r`` around ``x, y`` - a game-style target marker."""
+
+    t: Literal["target"] = "target"
+    x: int
+    y: int
+    r: int = 12
+
+
+DisplayElement = Annotated[TextEl | ArrowEl | ChevronEl | TargetEl, Field(discriminator="t")]
 
 
 class DisplayScene(BaseModel):

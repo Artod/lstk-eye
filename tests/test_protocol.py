@@ -10,6 +10,7 @@ from lstk_eye.protocol.messages import (
     ArrowEl,
     ChevronEl,
     DisplayScene,
+    TargetEl,
     TextEl,
 )
 
@@ -52,7 +53,7 @@ def test_wire_keys_are_short_names():
     assert text_el["t"] == "text"
     assert set(arrow_el) == {"t", "x", "y", "angle", "length"}
     assert arrow_el["t"] == "arrow"
-    assert set(chevron_el) == {"t", "edge", "label"}
+    assert set(chevron_el) == {"t", "edge", "label", "x", "y"}
     assert chevron_el["t"] == "chevron"
 
 
@@ -60,4 +61,6 @@ def test_element_defaults():
     assert TextEl(text="a").size == 1
     assert ArrowEl(x=0, y=0).length == 14
     assert ChevronEl(edge="left").label == ""
+    assert ChevronEl(edge="left").x == -1  # device places it at the panel edge
+    assert TargetEl(x=4, y=5).r == 12
     assert DisplayScene().els == []

@@ -56,30 +56,55 @@ void chevron_mark(int cx, int cy, int dx, int dy) {
   }
 }
 
-// Double chevron hugging the given edge plus a short label beside it.
-void draw_chevron(const char* edge, const char* label) {
+// Double chevron pointing along the given edge plus a short label beside it.
+// tip_x/tip_y position the outer apex; -1 falls back to the physical panel
+// edge (the server sets explicit coordinates when the optics crop the panel).
+void draw_chevron(const char* edge, const char* label, int tip_x, int tip_y) {
   const int label_px = 6 * (int)strlen(label);
-  display.setTextSize(1);
+  int dx = 0, dy = 0;
   if (strcmp(edge, "right") == 0) {
-    chevron_mark(126, 32, 1, 0);
-    chevron_mark(120, 32, 1, 0);
-    display.setCursor(max(0, 113 - label_px), 28);
+    dx = 1;
+    if (tip_x < 0) { tip_x = 126; tip_y = 32; }
   } else if (strcmp(edge, "left") == 0) {
-    chevron_mark(1, 32, -1, 0);
-    chevron_mark(7, 32, -1, 0);
-    display.setCursor(15, 28);
+    dx = -1;
+    if (tip_x < 0) { tip_x = 1; tip_y = 32; }
   } else if (strcmp(edge, "up") == 0) {
-    chevron_mark(64, 1, 0, -1);
-    chevron_mark(64, 7, 0, -1);
-    display.setCursor(max(0, 64 - label_px / 2), 14);
+    dy = -1;
+    if (tip_x < 0) { tip_x = 64; tip_y = 1; }
   } else if (strcmp(edge, "down") == 0) {
-    chevron_mark(64, 62, 0, 1);
-    chevron_mark(64, 56, 0, 1);
-    display.setCursor(max(0, 64 - label_px / 2), 42);
+    dy = 1;
+    if (tip_x < 0) { tip_x = 64; tip_y = 62; }
   } else {
     return;
   }
+  chevron_mark(tip_x, tip_y, dx, dy);
+  chevron_mark(tip_x - 6 * dx, tip_y - 6 * dy, dx, dy);
+  display.setTextSize(1);
+  if (dx > 0) {
+    display.setCursor(max(0, tip_x - 13 - label_px), tip_y - 4);
+  } else if (dx < 0) {
+    display.setCursor(tip_x + 14, tip_y - 4);
+  } else if (dy < 0) {
+    display.setCursor(max(0, tip_x - label_px / 2), tip_y + 13);
+  } else {
+    display.setCursor(max(0, tip_x - label_px / 2), tip_y - 20);
+  }
   display.print(label);
+}
+
+// Object highlight: four corner brackets framing a square of half-size r
+// around (x, y).
+void draw_target(int x, int y, int r) {
+  const int arm = max(3, r / 2);
+  const int x0 = x - r, y0 = y - r, x1 = x + r, y1 = y + r;
+  display.drawFastHLine(x0, y0, arm, SSD1306_WHITE);
+  display.drawFastVLine(x0, y0, arm, SSD1306_WHITE);
+  display.drawFastHLine(x1 - arm + 1, y0, arm, SSD1306_WHITE);
+  display.drawFastVLine(x1, y0, arm, SSD1306_WHITE);
+  display.drawFastHLine(x0, y1, arm, SSD1306_WHITE);
+  display.drawFastVLine(x0, y1 - arm + 1, arm, SSD1306_WHITE);
+  display.drawFastHLine(x1 - arm + 1, y1, arm, SSD1306_WHITE);
+  display.drawFastVLine(x1, y1 - arm + 1, arm, SSD1306_WHITE);
 }
 
 void render_scene(JsonObject scene) {
@@ -94,7 +119,9 @@ void render_scene(JsonObject scene) {
     } else if (strcmp(t, "arrow") == 0) {
       draw_arrow(el["x"] | 0, el["y"] | 0, el["angle"] | 225, el["length"] | 14);
     } else if (strcmp(t, "chevron") == 0) {
-      draw_chevron(el["edge"] | "", el["label"] | "");
+      draw_chevron(el["edge"] | "", el["label"] | "", el["x"] | -1, el["y"] | -1);
+    } else if (strcmp(t, "target") == 0) {
+      draw_target(el["x"] | 64, el["y"] | 32, el["r"] | 12);
     }
   }
   display.display();

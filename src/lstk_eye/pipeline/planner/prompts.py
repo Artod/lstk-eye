@@ -33,6 +33,10 @@ Rules for steps:
 - "mark_id" is the mark to point the arrow at, or null if the step has no
   single physical target (e.g. "wait 30 seconds").
 - Answer in the language of the question; keep technical terms as-is.
+- If the wearer asks to find, locate, or point at ONE object ("find my
+  phone", "where is the screwdriver"), return exactly one step: label = the
+  object's name, mark_id = the mark that best covers that object. The display
+  renders single-step answers as a highlight frame around the object.
 - If the question is not about anything visible, or the photo does not show
   what is being asked about, return a single step with a short honest label
   (e.g. "Object not in view") and mark_id null.
