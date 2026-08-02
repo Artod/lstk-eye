@@ -53,6 +53,15 @@ def wrap_text(text: str, width: int, max_lines: int = 2) -> list[str]:
     return lines
 
 
+def _short_label(text: str, limit: int = 10) -> str:
+    """One line, ideally one word: the first word when the full label would
+    not fit the limit."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text.split()[0][:limit] if text.split() else text[:limit]
+
+
 def _snap45(dx: int, dy: int) -> int:
     """Direction of vector (dx, dy) in screen degrees (0 = right, 90 = down)
     snapped to the nearest multiple of 45."""
@@ -126,8 +135,9 @@ class SceneComposer:
     def _floating_label(self, text: str, x: int, y: int, r: int) -> TextEl:
         """Game-style label attached to a target marker: preferably right
         above the brackets, else below, always whole and inside the visible
-        area, centered on the marker."""
-        text = text[: self.chars_per_line]
+        area, centered on the marker. Always ONE line, preferably one word -
+        the display window is tiny and long labels smother the marker."""
+        text = _short_label(text)
         w = len(text) * CHAR_W
         lx = min(max(x - w // 2, self.x0), self.x1 + 1 - w)
         above = y - r - GLYPH_H - 2
@@ -199,10 +209,11 @@ class SceneComposer:
                     self._floating_label(slide.label, target.x, target.y, target.r)
                 )
             else:
-                els.append(self._compass(anchor, label=slide.label[:8]))
+                els.append(self._compass(anchor, label=_short_label(slide.label, 8)))
         else:
-            els.append(self._centered(slide.label, y=22))
-            els.append(self._centered("look back", y=34))
+            # The camera genuinely does not see the target: say so, small and
+            # honest - no marker, no fake direction, no shouting.
+            els.append(self._centered("cant see", y=28))
         return DisplayScene(seq=seq, els=els)
 
     def _target_el(self, px: tuple[int, int], size: tuple[float, float] | None) -> TargetEl:

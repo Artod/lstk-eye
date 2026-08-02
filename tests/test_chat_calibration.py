@@ -459,14 +459,31 @@ def test_refinement_without_photo_reuses_active_capture(rig):
 
     glasses.capture(make_test_image())
     first = glasses.ask(text="find the tulip in the scene")
-    assert first.active and len(called) == 1
+    n1 = len(called)
+    assert first.active and n1 >= 1  # refine may add a second planner call
 
     followup = glasses.ask(text="find the red tulip instead please")
     assert followup.active
-    assert len(called) == 2, "the pipeline must rerun on the retained capture"
+    n2 = len(called)
+    assert n2 > n1, "the pipeline must rerun on the retained capture"
     assert not any("no photo" in t for t in _texts(followup.scene))
 
     # A fresh click still takes priority as the new context.
     glasses.capture(make_test_image())
-    third = glasses.ask(text="find the vase next to everything")
-    assert len(called) == 3
+    glasses.ask(text="find the vase next to everything")
+    assert len(called) > n2
+
+
+def test_coarse_find_answer_gets_refined(rig):
+    """A find-answer anchored to a huge mask triggers a zoomed second pass;
+    the final anchor comes from the refined (synthetic-id) mask."""
+    glasses, app = rig
+    glasses.capture(make_test_image())
+    resp = glasses.ask(text="find the dial on this thing")
+    assert resp.active
+    sess = _session(app)
+    slide = sess._slides[0]
+    # The mock planner picks the largest mask (the multimeter body, huge),
+    # so the refine pass must have replaced it with a crop-level mask.
+    assert slide.mark_id is not None and slide.mark_id >= 1000
+    assert slide.size is not None and slide.size[0] < 0.6

@@ -158,9 +158,17 @@ class TemplateTracker(TargetTracker):
                     self._visible = False
                     self._pending = None
         else:
-            # Re-appearing needs two consecutive confident matches that agree
-            # on position - random look-alike peaks jump and never do.
-            if confident:
+            if confident and self._edge_check:
+                # Structure-verified matches are trustworthy on sight:
+                # re-show immediately (recovery speed matters to the eyes).
+                self._visible = True
+                self._misses = 0
+                self._center = best_center
+                self._scale = best_scale
+                self._pending = None
+            elif confident:
+                # Textureless template, no structure gate: fall back to
+                # temporal consistency - two consecutive agreeing matches.
                 if (
                     self._pending is not None
                     and abs(best_center[0] - self._pending[0])

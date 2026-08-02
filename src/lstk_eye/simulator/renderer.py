@@ -88,14 +88,14 @@ def _draw_chevron(draw: ImageDraw.ImageDraw, el: ChevronEl) -> None:
     # Explicit tip position wins (the server insets it when the optics crop
     # the panel); -1/-1 falls back to the physical edge.
     cx, cy = (el.x, el.y) if el.x >= 0 and el.y >= 0 else _EDGE_CENTER[el.edge]
-    # Two nested angle marks (">>") pointing outward, apexes 5 px apart.
+    # Two solid triangles pointing outward, apexes 9 px apart (matches the
+    # firmware's fillTriangle rendering).
     for i in range(2):
-        ax = cx - i * _CHEVRON_STEP * dx
-        ay = cy - i * _CHEVRON_STEP * dy
-        for side in (1, -1):
-            bx = ax - _CHEVRON_ARM * dx + side * _CHEVRON_ARM * px
-            by = ay - _CHEVRON_ARM * dy + side * _CHEVRON_ARM * py
-            draw.line([(ax, ay), (bx, by)], fill=255)
+        ax = cx - i * 9 * dx
+        ay = cy - i * 9 * dy
+        base1 = (ax - 6 * dx + 5 * px, ay - 6 * dy + 5 * py)
+        base2 = (ax - 6 * dx - 5 * px, ay - 6 * dy - 5 * py)
+        draw.polygon([(ax, ay), base1, base2], fill=255)
     if not el.label:
         return
     font = _font(1)

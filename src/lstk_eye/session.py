@@ -59,6 +59,14 @@ PROMPT_SECONDS = 4.0
 # A photo whose decoded width is below this is not a capture (preview-sized
 # frames must never reach the planner).
 MIN_PHOTO_WIDTH = 600
+# A find-answer anchored to a mask covering more than this fraction of the
+# frame is too coarse to point at anything ("the whole picture is the
+# clitoris"): a second, zoomed segmentation+planning pass refines it.
+REFINE_AREA = 0.15
+# Synthetic mark ids for refined (second-pass) masks - never collide with
+# the segmenter's 1..max_masks range.
+REFINE_ID_BASE = 1000
+
 # Calibration marker acceptance: apparent size window (fraction of frame
 # width) and distance from the frame border. The lower bound sits just above
 # the detector's reliable floor; the upper bound rejects "marker fills the
@@ -335,6 +343,7 @@ class DeviceSession:
         marked = overlay_marks(capture, masks)
         marked_png = encode_png(marked)
         plan = self._rt.planner.plan(marked_png, question, masks, history=self._history)
+        plan, masks = self._refine_plan(capture, question, plan, masks)
 
         mask_by_id = {m.mark_id: m for m in masks}
         slides = [
@@ -664,6 +673,71 @@ class DeviceSession:
         return self._set_scene(
             self._rt.composer.status("calibrated", self._next_seq(), "hold btn + ask")
         )
+
+    def _refine_plan(self, capture, question: str, plan, masks):
+        """Coarse-to-fine pass: when a find-answer anchors to a huge mask,
+        crop that region, re-segment it at its native resolution (small parts
+        get their own masks there), and ask the planner to point again inside
+        the zoom. Falls back to the coarse answer on any failure."""
+        from lstk_eye.pipeline.types import Plan, PlanStep
+
+        if len(plan.steps) != 1 or plan.steps[0].mark_id is None:
+            return plan, masks
+        coarse = next((m for m in masks if m.mark_id == plan.steps[0].mark_id), None)
+        if coarse is None or coarse.area < REFINE_AREA:
+            return plan, masks
+        x, y, w, h = coarse.bbox
+        pad = 0.08
+        cx0, cy0 = max(0.0, x - pad * w), max(0.0, y - pad * h)
+        cx1, cy1 = min(1.0, x + w * (1 + pad)), min(1.0, y + h * (1 + pad))
+        fh, fw = capture.shape[:2]
+        crop = capture[int(cy0 * fh) : int(cy1 * fh), int(cx0 * fw) : int(cx1 * fw)]
+        if crop.size == 0:
+            return plan, masks
+        try:
+            sub_masks = self._rt.segmenter.segment(crop)
+        except LstkError:
+            return plan, masks
+        if len(sub_masks) < 2:
+            return plan, masks  # the zoom found no finer structure
+        sub_png = encode_png(overlay_marks(crop, sub_masks))
+        zoom_q = (
+            f"{question}\n(This is a ZOOMED view of the relevant area - "
+            f"point at the precise spot now.)"
+        )
+        try:
+            sub_plan = self._rt.planner.plan(
+                sub_png, zoom_q, sub_masks, history=self._history
+            )
+        except LstkError:
+            log.info("refine pass failed; keeping the coarse answer", exc_info=True)
+            return plan, masks
+        if len(sub_plan.steps) != 1 or sub_plan.steps[0].mark_id is None:
+            return plan, masks
+        chosen = next(
+            (m for m in sub_masks if m.mark_id == sub_plan.steps[0].mark_id), None
+        )
+        if chosen is None:
+            return plan, masks
+        # Map the crop-space mask back into full-frame normalized coordinates.
+        sw, sh = cx1 - cx0, cy1 - cy0
+        bx, by, bw, bh = chosen.bbox
+        mapped = SegMask(
+            mark_id=REFINE_ID_BASE + chosen.mark_id,
+            bbox=(cx0 + bx * sw, cy0 + by * sh, bw * sw, bh * sh),
+            centroid=(cx0 + chosen.centroid[0] * sw, cy0 + chosen.centroid[1] * sh),
+            area=chosen.area * sw * sh,
+            mask=None,
+        )
+        log.info(
+            "refined %r: coarse area %.2f -> %.3f at (%.2f, %.2f)",
+            question, coarse.area, mapped.area, *mapped.centroid,
+        )
+        step = PlanStep(
+            label=sub_plan.steps[0].label or plan.steps[0].label,
+            mark_id=mapped.mark_id,
+        )
+        return Plan(steps=[step], summary=plan.summary), [*masks, mapped]
 
     def _scaled_slide(self) -> Slide:
         """Current slide with its bbox size scaled by the tracker's apparent

@@ -129,32 +129,18 @@ def test_disappear_is_lazy_exactly_miss_hide(cfg, rng):
         assert res.found is expected, f"after {i} misses expected found={expected}"
 
 
-def test_reappear_needs_two_consistent_frames(cfg, rng):
-    """After a loss, one confident frame is not enough (a look-alike blob can
-    score once); two consecutive confident matches that agree on position
-    re-show the target."""
+def test_reappear_is_immediate_for_textured_targets(cfg, rng):
+    """The structure gate makes a confident match trustworthy on sight, so a
+    textured target re-shows on the first verified frame - recovery speed
+    matters to the eyes. (Textureless templates, where the gate is off, fall
+    back to two-frame temporal consistency instead.)"""
     tracker = _new_tracker(cfg, rng)
     tracker.update(_preview((0.5, 0.5), rng))
     for _ in range(cfg.miss_hide):
         tracker.update(_background(PREVIEW_W, PREVIEW_H, rng))
-    first = tracker.update(_preview((0.45, 0.55), rng))
-    assert not first.found, "a single confident frame must not re-show"
-    second = tracker.update(_preview((0.45, 0.55), rng))
-    assert second.found
-    assert second.confidence >= cfg.appear_conf
-
-
-def test_reappear_rejects_jumping_candidates(cfg, rng):
-    """Confident matches at wildly different positions (random look-alikes)
-    never satisfy the consistency check."""
-    tracker = _new_tracker(cfg, rng)
-    tracker.update(_preview((0.5, 0.5), rng))
-    for _ in range(cfg.miss_hide):
-        tracker.update(_background(PREVIEW_W, PREVIEW_H, rng))
-    positions = [(0.2, 0.3), (0.7, 0.6), (0.3, 0.8), (0.8, 0.2)]
-    for pos in positions:
-        res = tracker.update(_preview(pos, rng))
-        assert not res.found, f"jumping candidate at {pos} must not re-show"
+    res = tracker.update(_preview((0.45, 0.55), rng))
+    assert res.found, "verified reappearance must be immediate"
+    assert res.confidence >= cfg.appear_conf
 
 
 def test_visible_teleport_counts_as_miss(cfg, rng):

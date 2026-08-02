@@ -196,7 +196,8 @@ def test_render_chevron_up_edge():
     scene = DisplayScene(seq=1, els=[ChevronEl(edge="up")])
     arr = np.array(render_scene(scene, scale=1))
     assert arr[0:8, 58:71].any()  # marks at the top center
-    assert not arr[16:, :].any()
+    # Triangle bases reach y=17 (apex 2 + step 9 + depth 6).
+    assert not arr[20:, :].any()
 
 
 # --- device client ---

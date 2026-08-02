@@ -45,15 +45,15 @@ void draw_arrow(int x, int y, int angle_deg, int length) {
   }
 }
 
-// One V mark with its tip at (cx, cy) pointing along the axis-aligned
-// direction (dx, dy).
+// One solid triangle with its tip at (cx, cy) pointing along the
+// axis-aligned direction (dx, dy). Filled: no stray joint pixels.
 void chevron_mark(int cx, int cy, int dx, int dy) {
   if (dx != 0) {
-    display.drawLine(cx, cy, cx - 5 * dx, cy - 6, SSD1306_WHITE);
-    display.drawLine(cx, cy, cx - 5 * dx, cy + 6, SSD1306_WHITE);
+    display.fillTriangle(cx, cy, cx - 6 * dx, cy - 5, cx - 6 * dx, cy + 5,
+                         SSD1306_WHITE);
   } else {
-    display.drawLine(cx, cy, cx - 6, cy - 5 * dy, SSD1306_WHITE);
-    display.drawLine(cx, cy, cx + 6, cy - 5 * dy, SSD1306_WHITE);
+    display.fillTriangle(cx, cy, cx - 5, cy - 6 * dy, cx + 5, cy - 6 * dy,
+                         SSD1306_WHITE);
   }
 }
 
@@ -79,7 +79,7 @@ void draw_chevron(const char* edge, const char* label, int tip_x, int tip_y) {
     return;
   }
   chevron_mark(tip_x, tip_y, dx, dy);
-  chevron_mark(tip_x - 6 * dx, tip_y - 6 * dy, dx, dy);
+  chevron_mark(tip_x - 9 * dx, tip_y - 9 * dy, dx, dy);
   display.setTextSize(1);
   if (dx > 0) {
     display.setCursor(max(0, tip_x - 13 - label_px), tip_y - 4);
@@ -108,9 +108,19 @@ void draw_target(int x, int y, int r) {
   display.drawFastVLine(x1, y1 - arm + 1, arm, SSD1306_WHITE);
 }
 
-void render_scene(JsonObject scene) {
+// Last drawn marker (target or arrow) for inter-scene tweening.
+struct MarkerState {
+  bool has = false;
+  char type = 0;  // 't' target, 'a' arrow
+  int x = 0, y = 0, r = 12, angle = 225, len = 12;
+};
+MarkerState last_marker;
+
+// Render all elements; when ov != nullptr the FIRST target/arrow element is
+// drawn at the override position instead of its own (tween frame).
+void render_els(JsonArray els, const MarkerState* ov) {
   frame_start();
-  JsonArray els = scene["els"].as<JsonArray>();
+  bool marker_done = false;
   for (JsonObject el : els) {
     const char* t = el["t"] | "";
     if (strcmp(t, "text") == 0) {
@@ -118,14 +128,69 @@ void render_scene(JsonObject scene) {
       display.setCursor(el["x"] | 0, el["y"] | 0);
       display.print(el["text"] | "");
     } else if (strcmp(t, "arrow") == 0) {
-      draw_arrow(el["x"] | 0, el["y"] | 0, el["angle"] | 225, el["length"] | 14);
+      if (ov != nullptr && !marker_done) {
+        draw_arrow(ov->x, ov->y, ov->angle, ov->len);
+        marker_done = true;
+      } else {
+        draw_arrow(el["x"] | 0, el["y"] | 0, el["angle"] | 225, el["length"] | 14);
+      }
     } else if (strcmp(t, "chevron") == 0) {
       draw_chevron(el["edge"] | "", el["label"] | "", el["x"] | -1, el["y"] | -1);
     } else if (strcmp(t, "target") == 0) {
-      draw_target(el["x"] | 64, el["y"] | 32, el["r"] | 12);
+      if (ov != nullptr && !marker_done) {
+        draw_target(ov->x, ov->y, ov->r);
+        marker_done = true;
+      } else {
+        draw_target(el["x"] | 64, el["y"] | 32, el["r"] | 12);
+      }
     }
   }
   display.display();
+}
+
+MarkerState extract_marker(JsonArray els) {
+  MarkerState m;
+  for (JsonObject el : els) {
+    const char* t = el["t"] | "";
+    if (strcmp(t, "target") == 0) {
+      m.has = true;
+      m.type = 't';
+      m.x = el["x"] | 64;
+      m.y = el["y"] | 32;
+      m.r = el["r"] | 12;
+      return m;
+    }
+    if (strcmp(t, "arrow") == 0) {
+      m.has = true;
+      m.type = 'a';
+      m.x = el["x"] | 0;
+      m.y = el["y"] | 0;
+      m.angle = el["angle"] | 225;
+      m.len = el["length"] | 14;
+      return m;
+    }
+  }
+  return m;
+}
+
+void render_scene(JsonObject scene) {
+  JsonArray els = scene["els"].as<JsonArray>();
+  const MarkerState next = extract_marker(els);
+  // Tween: when the same marker kind moves between consecutive scenes,
+  // slide it there over a few frames instead of teleporting - the anchor
+  // updates arrive at only ~4 Hz and hard jumps are tiring to the eyes.
+  if (last_marker.has && next.has && last_marker.type == next.type &&
+      (abs(next.x - last_marker.x) > 2 || abs(next.y - last_marker.y) > 2)) {
+    for (int k = 1; k <= 2; ++k) {
+      MarkerState mid = next;
+      mid.x = last_marker.x + (next.x - last_marker.x) * k / 3;
+      mid.y = last_marker.y + (next.y - last_marker.y) * k / 3;
+      mid.r = last_marker.r + (next.r - last_marker.r) * k / 3;
+      render_els(els, &mid);
+    }
+  }
+  render_els(els, nullptr);
+  last_marker = next;
 }
 
 }  // namespace
@@ -148,6 +213,7 @@ bool hud_begin(bool mirrored) {
 }
 
 void hud_splash(const char* version) {
+  last_marker.has = false;
   frame_start();
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 14);
   display.print("lstk-eye");
@@ -158,6 +224,7 @@ void hud_splash(const char* version) {
 }
 
 void hud_message(const char* line1, const char* line2) {
+  last_marker.has = false;
   frame_start();
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
   display.print(line1);
@@ -167,6 +234,7 @@ void hud_message(const char* line1, const char* line2) {
 }
 
 void hud_rec(uint32_t seconds, bool capped) {
+  last_marker.has = false;
   frame_start();
   display.fillCircle(HUD_PAD_X + 4, HUD_PAD_Y + 10, 4, SSD1306_WHITE);
   display.setTextSize(2);
@@ -184,6 +252,7 @@ void hud_rec(uint32_t seconds, bool capped) {
 }
 
 void hud_thinking() {
+  last_marker.has = false;
   frame_start();
   display.setCursor(HUD_PAD_X + 6, HUD_PAD_Y + 20);
   display.print("thinking...");
@@ -191,6 +260,7 @@ void hud_thinking() {
 }
 
 void hud_error(const char* msg) {
+  last_marker.has = false;
   frame_start();
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
   display.print("! error");
@@ -206,6 +276,7 @@ void hud_error(const char* msg) {
 }
 
 void hud_photo_count(int count) {
+  last_marker.has = false;
   frame_start();
   display.setTextSize(2);
   display.setCursor(HUD_PAD_X + 2, HUD_PAD_Y + 14);
