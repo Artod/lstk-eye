@@ -40,6 +40,13 @@ _MIN_TEMPLATE_PX = 8
 _CONSIST_EPS = 0.08
 _OUTLIER_EPS = 0.20
 
+# Structure verification: intensity correlation alone latches onto flat
+# same-brightness blobs (clothing). A candidate match must also correlate on
+# the Laplacian (edge structure) - smooth impostors score near zero there.
+# Skipped for genuinely textureless templates.
+_EDGE_CONF = 0.25
+_EDGE_MIN_STD = 4.0
+
 
 class TemplateTracker(TargetTracker):
     """Tracks one target across preview frames via template matching."""
@@ -52,6 +59,9 @@ class TemplateTracker(TargetTracker):
     ) -> None:
         self._cfg = cfg
         self._template = template_gray
+        lap = cv2.Laplacian(template_gray, cv2.CV_32F, ksize=3)
+        # Textureless templates cannot be edge-verified; disable the check.
+        self._edge_check = float(lap.std()) >= _EDGE_MIN_STD
         # Normalized (w, h) of the template region on its source frame; used
         # to compute the template's expected pixel size on any preview frame.
         self._norm_w, self._norm_h = norm_size
@@ -62,6 +72,7 @@ class TemplateTracker(TargetTracker):
         self._visible = True
         self._misses = 0
         self._center: tuple[float, float] | None = None
+        self._scale = 1.0
         # Last confident-but-unconfirmed candidate while hidden (temporal
         # consistency check for re-appearing).
         self._pending: tuple[float, float] | None = None
@@ -70,26 +81,58 @@ class TemplateTracker(TargetTracker):
         frame_h, frame_w = frame_gray.shape[:2]
         best_conf: float | None = None
         best_center: tuple[float, float] | None = None
+        best_scale = 1.0
+        best_roi: np.ndarray | None = None
+        best_tpl: np.ndarray | None = None
+
+        # Replicate-pad the frame so a target half-out of the camera frame
+        # (the wearer turning away) still matches while any of it is visible;
+        # without this, edge targets are lost the moment the template no
+        # longer fits inside the frame.
+        pad_w = max(1, round(self._norm_w * frame_w * max(self._cfg.scales) / 2))
+        pad_h = max(1, round(self._norm_h * frame_h * max(self._cfg.scales) / 2))
+        padded = cv2.copyMakeBorder(
+            frame_gray, pad_h, pad_h, pad_w, pad_w, cv2.BORDER_REPLICATE
+        )
 
         for s in self._cfg.scales:
             tpl_w = round(self._norm_w * frame_w * s)
             tpl_h = round(self._norm_h * frame_h * s)
             if tpl_w < _MIN_TEMPLATE_PX or tpl_h < _MIN_TEMPLATE_PX:
                 continue
-            if tpl_w > frame_w or tpl_h > frame_h:
+            if tpl_w > padded.shape[1] or tpl_h > padded.shape[0]:
                 continue
             interp = cv2.INTER_AREA if tpl_w < self._template.shape[1] else cv2.INTER_LINEAR
             tpl = cv2.resize(self._template, (tpl_w, tpl_h), interpolation=interp)
-            scores = cv2.matchTemplate(frame_gray, tpl, cv2.TM_CCOEFF_NORMED)
+            scores = cv2.matchTemplate(padded, tpl, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(scores)
             if best_conf is None or max_val > best_conf:
                 best_conf = float(max_val)
                 best_center = (
-                    (max_loc[0] + tpl_w / 2.0) / frame_w,
-                    (max_loc[1] + tpl_h / 2.0) / frame_h,
+                    (max_loc[0] - pad_w + tpl_w / 2.0) / frame_w,
+                    (max_loc[1] - pad_h + tpl_h / 2.0) / frame_h,
                 )
+                best_scale = s
+                best_roi = padded[
+                    max_loc[1] : max_loc[1] + tpl_h, max_loc[0] : max_loc[0] + tpl_w
+                ]
+                best_tpl = tpl
 
         conf = 0.0 if best_conf is None else best_conf
+
+        # Structure check: the matched patch must share edge structure with
+        # the template, not just brightness distribution.
+        if (
+            conf >= self._cfg.disappear_conf
+            and self._edge_check
+            and best_roi is not None
+            and best_tpl is not None
+        ):
+            lap_roi = cv2.Laplacian(best_roi, cv2.CV_32F, ksize=3)
+            lap_tpl = cv2.Laplacian(best_tpl, cv2.CV_32F, ksize=3)
+            edge_scores = cv2.matchTemplate(lap_roi, lap_tpl, cv2.TM_CCOEFF_NORMED)
+            if float(edge_scores.max()) < _EDGE_CONF:
+                conf = 0.0  # impostor: bright-similar but structurally flat
         confident = best_center is not None and conf >= self._cfg.appear_conf
         plausible = best_center is not None and conf >= self._cfg.disappear_conf
 
@@ -104,6 +147,7 @@ class TemplateTracker(TargetTracker):
             if confident and not outlier:
                 self._misses = 0
                 self._update_center(best_center)
+                self._scale = 0.3 * best_scale + 0.7 * self._scale
             elif plausible and not outlier:
                 # Dead band: hold state; still track the position gently.
                 self._update_center(best_center)
@@ -126,13 +170,16 @@ class TemplateTracker(TargetTracker):
                     self._visible = True
                     self._misses = 0
                     self._center = best_center
+                    self._scale = best_scale
                     self._pending = None
                 else:
                     self._pending = best_center
             else:
                 self._pending = None
 
-        return MatchResult(found=self._visible, center=self._center, confidence=conf)
+        return MatchResult(
+            found=self._visible, center=self._center, confidence=conf, scale=self._scale
+        )
 
     def _update_center(self, measured: tuple[float, float]) -> None:
         if self._center is None:

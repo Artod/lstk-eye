@@ -205,3 +205,18 @@ def test_scale_robustness(cfg, rng, scale):
     assert res.center is not None
     assert abs(res.center[0] - 0.5) < 0.04
     assert abs(res.center[1] - 0.5) < 0.04
+
+
+def test_flat_impostor_rejected_by_edge_check(cfg, rng):
+    """A smooth blob with matching brightness (clothing) must not count as
+    the textured target: the Laplacian correlation gate rejects it."""
+    tracker = _new_tracker(cfg, rng)
+    tracker.update(_preview((0.5, 0.5), rng))  # lock onto the real target
+
+    # Frame with a flat bright rectangle instead of the patterned patch.
+    flat = _background(PREVIEW_W, PREVIEW_H, rng)
+    ph, pw = int(0.2 * PREVIEW_H), int(0.2 * PREVIEW_W)
+    flat[20 : 20 + ph, 30 : 30 + pw] = 200
+    for i in range(cfg.miss_hide):
+        res = tracker.update(flat)
+    assert not res.found, "flat impostor kept the target visible"

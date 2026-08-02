@@ -17,6 +17,7 @@
 // the worker self-schedules a QVGA preview every PREVIEW_INTERVAL_MS.
 
 #include <Arduino.h>
+#include <esp_system.h>
 
 #include "buttons.h"
 #include "cam.h"
@@ -56,6 +57,10 @@ static QueueHandle_t q_results;
 // worker also clears it when a preview response says the session ended.
 static volatile bool g_session_active = false;
 static volatile bool g_online = false;
+// True from long-press start until the ask result is applied: the worker
+// sends no previews and the UI ignores stale preview scenes, so REC and
+// "thinking..." screens are never overdrawn by tracking frames.
+static volatile bool g_hold_previews = false;
 
 static String api(const char* path) {
   return String(path) + "?device_id=" + DEVICE_ID;
@@ -123,7 +128,7 @@ static void worker_task(void*) {
       }
       continue;
     }
-    if (g_online && g_session_active &&
+    if (g_online && g_session_active && !g_hold_previews &&
         millis() - last_preview_ms >= PREVIEW_INTERVAL_MS &&
         uxQueueMessagesWaiting(q_jobs) == 0) {
       last_preview_ms = millis();
@@ -158,6 +163,9 @@ static void enqueue(JobType type, uint8_t* wav = nullptr, size_t len = 0) {
 static void apply_result(const NetResultMsg& msg) {
   const String body(msg.body);
   if (msg.type == (JobType)0xFF) {  // preview
+    if (state == ST_RECORDING || state == ST_WAITING) {
+      return;  // stale frame from before the hold engaged
+    }
     bool active = true;
     hud_apply_response(body, &active, nullptr);
     if (!active) {
@@ -183,6 +191,7 @@ static void apply_result(const NetResultMsg& msg) {
       }
       break;
     case JOB_RESET: {
+      g_hold_previews = false;
       if (!msg.ok) {
         hud_error("reset failed");
         break;
@@ -195,6 +204,7 @@ static void apply_result(const NetResultMsg& msg) {
       break;
     }
     case JOB_ASK: {
+      g_hold_previews = false;
       if (!msg.ok) {
         hud_error("ask failed");
         state = ST_IDLE;
@@ -213,6 +223,9 @@ static void apply_result(const NetResultMsg& msg) {
 
 void setup() {
   Serial.begin(115200);
+  delay(50);
+  // 1=power-on, 3=sw, 4=panic, 5=int_wdt, 6=task_wdt, 7=other_wdt, 9=brownout
+  Serial.printf("[boot] fw %s, reset reason %d\n", FW_VERSION, (int)esp_reset_reason());
   if (!hud_begin(HUD_MIRRORED != 0)) {
     Serial.println("[hud] SSD1306 init failed");
   }
@@ -238,7 +251,7 @@ void setup() {
     hud_message("lstk-eye " FW_VERSION,
                 health.ok ? "server ok" : "server unreachable");
   }
-  xTaskCreatePinnedToCore(worker_task, "net", 16384, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(worker_task, "net", 20480, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
@@ -267,6 +280,7 @@ void loop() {
         enqueue(JOB_RESET);
       } else if (ev == BTN_LONG_START) {
         if (mic_record_start()) {
+          g_hold_previews = true;
           state = ST_RECORDING;
           last_rec_draw_ms = millis();
           hud_rec(0, false);
@@ -288,6 +302,7 @@ void loop() {
         if (len == 0 || wav == nullptr) {
           hud_error("no audio captured");
           state = ST_IDLE;
+          g_hold_previews = false;
         } else {
           state = ST_WAITING;
           hud_thinking();

@@ -371,14 +371,17 @@ def test_prompt_screen_auto_restores_slide(rig, monkeypatch):
     start = glasses.ask(text="find the phone here")
     assert start.active
 
-    prompt = glasses.ask(text="and where is the charger for it")  # no photo buffered
+    # An empty transcript mid-session raises a transient prompt over the
+    # live task (follow-up questions now reuse the capture, so "no photo"
+    # no longer occurs mid-chat).
+    prompt = glasses.ask(text="   ")
     assert prompt.active
-    assert any("no photo" in t for t in _texts(prompt.scene))
+    assert any("didn't catch" in t for t in _texts(prompt.scene))
 
     # Before the prompt deadline: previews keep the prompt.
     kept = glasses.preview(make_test_image(), last_seq=prompt.scene.seq)
     texts_now = _texts(kept.scene) if kept.scene else _texts(prompt.scene)
-    assert any("no photo" in t for t in texts_now)
+    assert any("didn't catch" in t for t in texts_now)
 
     # After the deadline the preview stream restores the slide.
     sess = _session(app)
@@ -443,3 +446,27 @@ def test_calibration_success_names_next_action(rig):
     texts = _texts(ack.scene)
     assert "calibrated" in texts
     assert any("hold btn" in t for t in texts), "the end must state what to do next"
+
+
+def test_refinement_without_photo_reuses_active_capture(rig):
+    """'No, the RED tulip' with no new click must rerun the pipeline on the
+    capture the current task is built on, not demand a new photo."""
+    glasses, app = rig
+    called = []
+    planner = app.state.runtime.planner
+    original = planner.plan
+    planner.plan = lambda *a, **k: (called.append(1), original(*a, **k))[1]
+
+    glasses.capture(make_test_image())
+    first = glasses.ask(text="find the tulip in the scene")
+    assert first.active and len(called) == 1
+
+    followup = glasses.ask(text="find the red tulip instead please")
+    assert followup.active
+    assert len(called) == 2, "the pipeline must rerun on the retained capture"
+    assert not any("no photo" in t for t in _texts(followup.scene))
+
+    # A fresh click still takes priority as the new context.
+    glasses.capture(make_test_image())
+    third = glasses.ask(text="find the vase next to everything")
+    assert len(called) == 3

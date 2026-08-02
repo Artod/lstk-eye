@@ -152,10 +152,12 @@ class DeviceSession:
         self._slides: list[Slide] = []
         self._mask_by_id: dict[int, SegMask] = {}
         self._capture_bgr: np.ndarray | None = None
+        self._capture_jpeg: bytes | None = None
         self._step = 0
         self._tracker: TargetTracker | None = None
         self._anchored = False
         self._anchor: tuple[float, float] | None = None
+        self._track_scale = 1.0
         # "target" for find-this sessions (a single anchored step renders as
         # highlight brackets); "arrow" for multi-step instructions.
         self._style = "arrow"  # type: str
@@ -311,11 +313,15 @@ class DeviceSession:
 
         now = time.monotonic()
         fresh = [(b, t) for b, t in self._photos if now - t < PHOTO_TTL_S]
-        if not fresh:
-            # active must reflect the real session state: a follow-up question
-            # without a fresh capture must not tell the device the session
-            # ended while the server keeps it alive. Distinguish "never
-            # clicked" from "clicked too long ago".
+        if fresh:
+            capture_jpeg = fresh[-1][0]
+            capture = self._decode(capture_jpeg)
+        elif self.active and self._capture_bgr is not None:
+            # Refinement without a new photo ("no, the RED tulip"): rerun the
+            # pipeline on the capture the current task is built on.
+            capture = self._capture_bgr
+            capture_jpeg = self._capture_jpeg or b""
+        else:
             headline = "photos expired" if self._photos else "no photo"
             scene = self._set_scene(
                 self._rt.composer.status(headline, self._next_seq(), "click, then ask")
@@ -324,9 +330,6 @@ class DeviceSession:
             if self.active:
                 self._restore_slide_after_prompt()
             return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
-
-        capture_jpeg = fresh[-1][0]
-        capture = self._decode(capture_jpeg)
 
         masks = self._rt.segmenter.segment(capture)
         marked = overlay_marks(capture, masks)
@@ -364,6 +367,7 @@ class DeviceSession:
         self._history = self._history[-MAX_HISTORY:]
         self._mask_by_id = mask_by_id
         self._capture_bgr = capture
+        self._capture_jpeg = capture_jpeg
         self._photos = []
         self._rt.store.save_request(
             self.session_id, capture_jpeg, marked_png, question, plan, slides
@@ -490,6 +494,7 @@ class DeviceSession:
         self._tracker = None
         self._anchored = slide.anchor is not None
         self._anchor = slide.anchor
+        self._track_scale = 1.0
         if (
             slide.anchor is not None
             and slide.mark_id is not None
@@ -510,6 +515,8 @@ class DeviceSession:
         frame = self._decode(jpeg, gray=True)
         assert self._tracker is not None
         res = self._tracker.update(frame)
+        if res.found:
+            self._track_scale = res.scale
         new_anchor = res.center if res.found and res.center is not None else self._anchor
         moved = (
             res.found
@@ -521,10 +528,10 @@ class DeviceSession:
         if res.found != self._anchored or moved:
             self._anchored = res.found
             self._anchor = new_anchor
-            slide = self._slides[self._step]
             self._set_scene(
                 self._rt.composer.slide(
-                    slide, self._next_seq(), self._anchored, self._anchor, style=self._style
+                    self._scaled_slide(), self._next_seq(), self._anchored, self._anchor,
+                    style=self._style,
                 )
             )
 
@@ -656,6 +663,19 @@ class DeviceSession:
             log.warning("calibration window suspiciously large - verify camera.rotation")
         return self._set_scene(
             self._rt.composer.status("calibrated", self._next_seq(), "hold btn + ask")
+        )
+
+    def _scaled_slide(self) -> Slide:
+        """Current slide with its bbox size scaled by the tracker's apparent
+        scale, so the highlight brackets grow and shrink with distance."""
+        import dataclasses
+
+        slide = self._slides[self._step]
+        if slide.size is None or abs(self._track_scale - 1.0) < 0.02:
+            return slide
+        return dataclasses.replace(
+            slide,
+            size=(slide.size[0] * self._track_scale, slide.size[1] * self._track_scale),
         )
 
     def _finish(self, message: str) -> DisplayScene:

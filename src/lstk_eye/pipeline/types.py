@@ -79,3 +79,6 @@ class MatchResult:
     found: bool
     center: tuple[float, float] | None = None  # normalized, in preview frame
     confidence: float = 0.0
+    # Smoothed apparent-scale of the target relative to the capture frame:
+    # feeds the highlight bracket size so it follows distance.
+    scale: float = 1.0
