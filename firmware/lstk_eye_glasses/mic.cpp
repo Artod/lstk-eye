@@ -50,20 +50,32 @@ void write_wav_header(uint8_t* h, uint32_t pcm_bytes) {
 }  // namespace
 
 bool mic_begin() {
-  wav_buf = (uint8_t*)ps_malloc(kWavHeaderBytes + kMaxPcmBytes);
-  if (wav_buf == nullptr) {
+  // Probe PSRAM availability once; the real buffer is allocated per
+  // recording (ownership transfers to the network worker, which frees it
+  // after the upload - a reused static buffer would race a second recording
+  // against an in-flight upload, and freeing a persistent buffer corrupts
+  // the heap, both observed the hard way).
+  void* probe = ps_malloc(kWavHeaderBytes + kMaxPcmBytes);
+  if (probe == nullptr) {
     return false;
   }
+  free(probe);
   i2s.setPinsPdmRx(PIN_PDM_CLK, PIN_PDM_DATA);
   return true;
 }
 
 bool mic_record_start() {
-  if (recording || wav_buf == nullptr) {
+  if (recording) {
+    return false;
+  }
+  wav_buf = (uint8_t*)ps_malloc(kWavHeaderBytes + kMaxPcmBytes);
+  if (wav_buf == nullptr) {
     return false;
   }
   if (!i2s.begin(I2S_MODE_PDM_RX, kSampleRate, I2S_DATA_BIT_WIDTH_16BIT,
                  I2S_SLOT_MODE_MONO)) {
+    free(wav_buf);
+    wav_buf = nullptr;
     return false;
   }
   pcm_len = 0;
@@ -100,9 +112,14 @@ size_t mic_record_stop(uint8_t** out_wav) {
   recording = false;
   i2s.end();
   if (pcm_len == 0) {
+    free(wav_buf);
+    wav_buf = nullptr;
     return 0;
   }
   write_wav_header(wav_buf, pcm_len);
+  // Ownership transfer: the caller (network worker) frees this buffer.
   *out_wav = wav_buf;
-  return kWavHeaderBytes + pcm_len;
+  const size_t total = kWavHeaderBytes + pcm_len;
+  wav_buf = nullptr;
+  return total;
 }
