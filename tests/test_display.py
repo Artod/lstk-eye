@@ -284,7 +284,7 @@ def test_target_without_size_uses_min_radius(composer):
     slide = make_slide(label="phone", anchor=(0.5, 0.5), index=0, total=1, size=None)
     scene = composer.slide(slide, seq=1, anchored=True, anchor=(0.5, 0.5), style="target")
     (target,) = targets(scene)
-    assert target.r == 6
+    assert target.r == 4  # TARGET_R_MIN
 
 
 # --- other scenes ---

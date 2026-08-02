@@ -1,6 +1,7 @@
 """Planner backed by the Anthropic API (structured outputs + vision)."""
 
 import base64
+import logging
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,8 @@ from lstk_eye.errors import PlanningError
 from lstk_eye.pipeline.interfaces import Planner
 from lstk_eye.pipeline.planner.prompts import LOCATE_PROMPT, SYSTEM_PROMPT, build_user_text
 from lstk_eye.pipeline.types import LocateResult, Plan, PlanStep, SegMask
+
+log = logging.getLogger(__name__)
 
 
 class _StepOut(BaseModel):
@@ -109,8 +112,14 @@ class AnthropicPlanner(Planner):
         current = image_bgr
         note = ""
         label = "target"
-        for _ in range(3):
-            ok, jpg = cv2.imencode(".jpg", current, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        for round_i in range(3):
+            # The wide first view does not need full resolution - a smaller
+            # image cuts prefill latency; zoom crops keep native pixels.
+            send = current
+            if round_i == 0 and current.shape[1] > 800:
+                scale = 800 / current.shape[1]
+                send = cv2.resize(current, None, fx=scale, fy=scale)
+            ok, jpg = cv2.imencode(".jpg", send, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not ok:
                 raise PlanningError("could not encode frame for the model")
             messages: list[dict] = []
@@ -136,7 +145,7 @@ class AnthropicPlanner(Planner):
             try:
                 response = self._get_client().messages.parse(
                     model=self._cfg.model,
-                    max_tokens=self._cfg.max_tokens,
+                    max_tokens=min(self._cfg.max_tokens, 2000),
                     output_config={"effort": self._cfg.effort},
                     system=LOCATE_PROMPT,
                     messages=messages,
@@ -154,6 +163,13 @@ class AnthropicPlanner(Planner):
             if out is None:
                 raise PlanningError("model output did not match the locate schema")
             label = (out.label or label).strip() or "target"
+            log.info(
+                "locate round %d: status=%s label=%s xy=(%s, %s) box=(%s, %s) "
+                "zoom=(%s, %s, %s, %s) region=%s",
+                round_i, out.status, label, out.x, out.y, out.box_w, out.box_h,
+                out.zoom_x, out.zoom_y, out.zoom_w, out.zoom_h,
+                tuple(round(v, 3) for v in region),
+            )
 
             rx, ry, rw, rh = region
             if out.status == "not_visible":

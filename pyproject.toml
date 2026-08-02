@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 stt = ["faster-whisper>=1.0"]
+mlx = ["mlx-whisper>=0.4", "numpy<2.5"]
 seg = ["ultralytics>=8.2"]
 full = ["lstk-eye[stt,seg]"]
 

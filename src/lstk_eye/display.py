@@ -34,7 +34,7 @@ LINE_H = 9  # label line pitch: 8 px glyph + 1 px gap
 GLYPH_H = 8
 ARROW_LENGTH = 12
 ERROR_MAX_LINES = 4
-TARGET_R_MIN = 6
+TARGET_R_MIN = 4
 TARGET_R_MAX = 22
 # Calibration crosshair bracket half-size; calibration points are inset from
 # the visible border by this plus a margin so brackets always render whole.

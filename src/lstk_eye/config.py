@@ -42,7 +42,7 @@ class ServerConfig(BaseModel):
 
 
 class SttConfig(BaseModel):
-    backend: Literal["whisper", "mock"] = "whisper"
+    backend: Literal["whisper", "mlx", "mock"] = "whisper"
     model: str = "small"  # faster-whisper model size
     language: str | None = None  # None or "" = autodetect
     device: str = "auto"
@@ -82,7 +82,8 @@ class SegmenterConfig(BaseModel):
 class PlannerConfig(BaseModel):
     backend: Literal["anthropic", "claude-cli", "mock"] = "anthropic"
     model: str = "claude-opus-5"
-    effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    # "low" keeps the perception calls snappy; pointing quality holds up.
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     max_tokens: int = 8000
     max_steps: int = 7
     # Must stay below the firmware's blocking /ask timeout (30 s) so the

@@ -17,6 +17,15 @@ def create_stt(cfg: AppConfig) -> SpeechToText:
         from lstk_eye.pipeline.stt.mock import MockSpeechToText
 
         return MockSpeechToText()
+    if backend == "mlx":
+        try:
+            from lstk_eye.pipeline.stt.mlx import MlxWhisperSpeechToText
+        except ImportError as e:
+            raise DependencyError(
+                "mlx-whisper is not installed (needed for stt.backend=mlx, macOS only)",
+                install_hint='pip install "lstk-eye[mlx]"',
+            ) from e
+        return MlxWhisperSpeechToText(cfg.stt)
     if backend == "whisper":
         try:
             from lstk_eye.pipeline.stt.whisper import WhisperSpeechToText
