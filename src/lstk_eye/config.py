@@ -121,7 +121,7 @@ class RelocConfig(BaseModel):
     appear_conf: float = 0.70
     disappear_conf: float = 0.55
     miss_hide: int = 3  # consecutive misses before the marker hides
-    ema: float = 0.5  # smoothing factor for anchor position, 1.0 = no smoothing
+    ema: float = 0.65  # smoothing factor for anchor position, 1.0 = no smoothing
     scales: list[float] = Field(default_factory=lambda: [0.85, 1.0, 1.18])
 
 

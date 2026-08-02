@@ -82,3 +82,17 @@ class MatchResult:
     # Smoothed apparent-scale of the target relative to the capture frame:
     # feeds the highlight bracket size so it follows distance.
     scale: float = 1.0
+    # Consecutive low-confidence frames; drives the staged lost UI (marker ->
+    # blank -> "cant see" only when the target is confidently long gone).
+    misses: int = 0
+
+
+@dataclass
+class LocateResult:
+    """Direct-pointing answer: the model localizes the asked object itself
+    (optionally after requesting zooms), in full-frame normalized coords."""
+
+    found: bool
+    label: str
+    point: tuple[float, float] | None = None
+    bbox: tuple[float, float, float, float] | None = None

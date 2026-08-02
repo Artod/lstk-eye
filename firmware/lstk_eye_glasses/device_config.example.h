@@ -31,7 +31,7 @@
 
 // Session preview cadence (~4 fps; anchor updates are bounded by this) and
 // recording cap. Raise the interval if the board runs too hot.
-#define PREVIEW_INTERVAL_MS 250
+#define PREVIEW_INTERVAL_MS 80
 #define REC_MAX_SECONDS 20
 
 // Network timeouts. /ask blocks through the full server pipeline, so it gets

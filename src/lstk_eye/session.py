@@ -27,7 +27,12 @@ from lstk_eye.calibration import WindowCalibration
 from lstk_eye.config import AppConfig, CalibrationConfig, save_calibration
 from lstk_eye.display import CHAR_W, CROSSHAIR_R, SceneComposer
 from lstk_eye.errors import ConfigError, LstkError, PipelineError
-from lstk_eye.intents import is_calibration_request, match_intent, normalize_words
+from lstk_eye.intents import (
+    is_calibration_request,
+    is_locate_request,
+    match_intent,
+    normalize_words,
+)
 from lstk_eye.pipeline import factories
 from lstk_eye.pipeline.fiducial import annotate_detection, detect_target
 from lstk_eye.pipeline.interfaces import TargetTracker
@@ -47,13 +52,17 @@ log = logging.getLogger(__name__)
 PHOTO_TTL_S = 120.0
 MAX_PHOTOS = 5
 # Minimum normalized anchor movement that triggers a scene update.
-ANCHOR_EPS = 0.008
+ANCHOR_EPS = 0.004
 # Chat history kept per device (question/answer pairs); the planner sees the
 # most recent slice of it.
 MAX_HISTORY = 12
 # Transient prompts ("no photo", "didn't catch that") shown mid-session are
 # restored back to the slide by the preview stream after this long.
 PROMPT_SECONDS = 4.0
+# Lost-target staging: after miss_hide the marker disappears (blank screen);
+# "cant see" appears only after this many consecutive misses - fast head
+# motion blurs a few frames and must not scream "cant see" at the wearer.
+CANT_SEE_MISSES = 12
 
 
 # A photo whose decoded width is below this is not a capture (preview-sized
@@ -166,6 +175,7 @@ class DeviceSession:
         self._anchored = False
         self._anchor: tuple[float, float] | None = None
         self._track_scale = 1.0
+        self._lost_stage = 0
         # "target" for find-this sessions (a single anchored step renders as
         # highlight brackets); "arrow" for multi-step instructions.
         self._style = "arrow"  # type: str
@@ -224,10 +234,12 @@ class DeviceSession:
             self._photos = self._photos[-MAX_PHOTOS:]
             count = len(self._photos)
             if self.active:
-                # Scenes replace each other, so a full photo-counter screen
-                # would wipe the answer. Acknowledge with a badge on the
-                # current scene instead.
-                return PhotoAck(count=count, scene=self._badge_scene(f"[{count}]"))
+                # A new capture means the wearer moved on: stop the tracking
+                # view (chat history survives) and show the photo state.
+                self._slides = []
+                self._tracker = None
+                self.active = False
+                self._prompt_until = None
             scene = self._set_scene(self._rt.composer.photo_count(count, self._next_seq()))
             return PhotoAck(count=count, scene=scene)
 
@@ -338,6 +350,11 @@ class DeviceSession:
             if self.active:
                 self._restore_slide_after_prompt()
             return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
+
+        if is_locate_request(question):
+            loc = self._rt.planner.locate(capture, question, history=self._history)
+            if loc is not None:
+                return self._answer_locate(question, capture, capture_jpeg, loc)
 
         masks = self._rt.segmenter.segment(capture)
         marked = overlay_marks(capture, masks)
@@ -504,14 +521,21 @@ class DeviceSession:
         self._anchored = slide.anchor is not None
         self._anchor = slide.anchor
         self._track_scale = 1.0
-        if (
-            slide.anchor is not None
-            and slide.mark_id is not None
-            and self._capture_bgr is not None
-        ):
+        self._lost_stage = 0
+        bbox = None
+        if slide.mark_id is not None and slide.mark_id in self._mask_by_id:
+            bbox = self._mask_by_id[slide.mark_id].bbox
+        elif slide.anchor is not None and slide.size is not None:
+            bw, bh = slide.size
+            bbox = (
+                min(max(slide.anchor[0] - bw / 2, 0.0), 1.0 - bw),
+                min(max(slide.anchor[1] - bh / 2, 0.0), 1.0 - bh),
+                bw,
+                bh,
+            )
+        if slide.anchor is not None and bbox is not None and self._capture_bgr is not None:
             try:
-                mask = self._mask_by_id[slide.mark_id]
-                self._tracker = self._rt.reloc.create(self._capture_bgr, mask.bbox)
+                self._tracker = self._rt.reloc.create(self._capture_bgr, bbox)
             except Exception:
                 log.warning("relocalizer setup failed for step %d", index, exc_info=True)
         return self._set_scene(
@@ -534,15 +558,22 @@ class DeviceSession:
             and abs(new_anchor[0] - self._anchor[0]) + abs(new_anchor[1] - self._anchor[1])
             > ANCHOR_EPS
         )
-        if res.found != self._anchored or moved:
+        # Staged lost UI: 0 = marker shown, 1 = blank (just lost, could be
+        # motion blur), 2 = "cant see" (confidently gone, the last resort).
+        stage = 0 if res.found else (1 if res.misses < CANT_SEE_MISSES else 2)
+        if stage != self._lost_stage or (res.found and moved) or res.found != self._anchored:
+            self._lost_stage = stage
             self._anchored = res.found
             self._anchor = new_anchor
-            self._set_scene(
-                self._rt.composer.slide(
-                    self._scaled_slide(), self._next_seq(), self._anchored, self._anchor,
-                    style=self._style,
+            if stage == 1:
+                self._set_scene(self._rt.composer.blank(self._next_seq()))
+            else:
+                self._set_scene(
+                    self._rt.composer.slide(
+                        self._scaled_slide(), self._next_seq(), self._anchored,
+                        self._anchor, style=self._style,
+                    )
                 )
-            )
 
     # --- calibration flow ---
     #
@@ -673,6 +704,44 @@ class DeviceSession:
         return self._set_scene(
             self._rt.composer.status("calibrated", self._next_seq(), "hold btn + ask")
         )
+
+    def _answer_locate(self, question: str, capture, capture_jpeg: bytes, loc) -> AskResponse:
+        """Answer a find-question from a direct-pointing result."""
+        from lstk_eye.pipeline.types import Plan, PlanStep
+
+        label = (loc.label or "target").strip()
+        log.info("[%s] locate %r -> found=%s at %s", self.device_id, question,
+                 loc.found, loc.point)
+        self._history.append((question, label if loc.found else f"{label} not visible"))
+        self._history = self._history[-MAX_HISTORY:]
+        if not loc.found:
+            scene = self._set_scene(
+                self._rt.composer.status(label, self._next_seq(), "not in view")
+            )
+            return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
+
+        size = (loc.bbox[2], loc.bbox[3]) if loc.bbox else (0.12, 0.12)
+        slide = Slide(
+            index=0, total=1, label=label, anchor=loc.point, mark_id=None, size=size
+        )
+        self.session_id = self.session_id or uuid.uuid4().hex[:8]
+        self.active = True
+        self._slides = [slide]
+        self._mask_by_id = {}
+        self._style = "target"
+        self._capture_bgr = capture
+        self._capture_jpeg = capture_jpeg
+        self._photos = []
+        self._rt.store.save_request(
+            self.session_id,
+            capture_jpeg,
+            encode_png(capture),
+            question,
+            Plan(steps=[PlanStep(label=label, mark_id=None)], summary=label),
+            self._slides,
+        )
+        scene = self._enter_step(0)
+        return AskResponse(session_id=self.session_id, scene=scene, active=True)
 
     def _refine_plan(self, capture, question: str, plan, masks):
         """Coarse-to-fine pass: when a find-answer anchors to a huge mask,

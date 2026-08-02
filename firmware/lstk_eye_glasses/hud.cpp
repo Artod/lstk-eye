@@ -45,15 +45,15 @@ void draw_arrow(int x, int y, int angle_deg, int length) {
   }
 }
 
-// One solid triangle with its tip at (cx, cy) pointing along the
-// axis-aligned direction (dx, dy). Filled: no stray joint pixels.
+// One thin V mark with its tip at (cx, cy) pointing along the axis-aligned
+// direction (dx, dy).
 void chevron_mark(int cx, int cy, int dx, int dy) {
   if (dx != 0) {
-    display.fillTriangle(cx, cy, cx - 6 * dx, cy - 5, cx - 6 * dx, cy + 5,
-                         SSD1306_WHITE);
+    display.drawLine(cx, cy, cx - 5 * dx, cy - 5, SSD1306_WHITE);
+    display.drawLine(cx, cy, cx - 5 * dx, cy + 5, SSD1306_WHITE);
   } else {
-    display.fillTriangle(cx, cy, cx - 5, cy - 6 * dy, cx + 5, cy - 6 * dy,
-                         SSD1306_WHITE);
+    display.drawLine(cx, cy, cx - 5, cy - 5 * dy, SSD1306_WHITE);
+    display.drawLine(cx, cy, cx + 5, cy - 5 * dy, SSD1306_WHITE);
   }
 }
 
@@ -79,16 +79,16 @@ void draw_chevron(const char* edge, const char* label, int tip_x, int tip_y) {
     return;
   }
   chevron_mark(tip_x, tip_y, dx, dy);
-  chevron_mark(tip_x - 9 * dx, tip_y - 9 * dy, dx, dy);
+  chevron_mark(tip_x - 7 * dx, tip_y - 7 * dy, dx, dy);
   display.setTextSize(1);
   if (dx > 0) {
-    display.setCursor(max(0, tip_x - 13 - label_px), tip_y - 4);
+    display.setCursor(max(0, tip_x - 16 - label_px), tip_y - 4);
   } else if (dx < 0) {
-    display.setCursor(tip_x + 14, tip_y - 4);
+    display.setCursor(tip_x + 17, tip_y - 4);
   } else if (dy < 0) {
-    display.setCursor(max(0, tip_x - label_px / 2), tip_y + 13);
+    display.setCursor(max(0, tip_x - label_px / 2), tip_y + 16);
   } else {
-    display.setCursor(max(0, tip_x - label_px / 2), tip_y - 20);
+    display.setCursor(max(0, tip_x - label_px / 2), tip_y - 23);
   }
   display.print(label);
 }
@@ -181,11 +181,11 @@ void render_scene(JsonObject scene) {
   // updates arrive at only ~4 Hz and hard jumps are tiring to the eyes.
   if (last_marker.has && next.has && last_marker.type == next.type &&
       (abs(next.x - last_marker.x) > 2 || abs(next.y - last_marker.y) > 2)) {
-    for (int k = 1; k <= 2; ++k) {
+    for (int k = 1; k <= 3; ++k) {
       MarkerState mid = next;
-      mid.x = last_marker.x + (next.x - last_marker.x) * k / 3;
-      mid.y = last_marker.y + (next.y - last_marker.y) * k / 3;
-      mid.r = last_marker.r + (next.r - last_marker.r) * k / 3;
+      mid.x = last_marker.x + (next.x - last_marker.x) * k / 4;
+      mid.y = last_marker.y + (next.y - last_marker.y) * k / 4;
+      mid.r = last_marker.r + (next.r - last_marker.r) * k / 4;
       render_els(els, &mid);
     }
   }
@@ -236,18 +236,18 @@ void hud_message(const char* line1, const char* line2) {
 void hud_rec(uint32_t seconds, bool capped) {
   last_marker.has = false;
   frame_start();
-  display.fillCircle(HUD_PAD_X + 4, HUD_PAD_Y + 10, 4, SSD1306_WHITE);
+  // Dead center: the visible window is small and its borders wobble, so
+  // status content always sits mid-panel.
+  display.fillCircle(46, 24, 4, SSD1306_WHITE);
   display.setTextSize(2);
-  display.setCursor(HUD_PAD_X + 14, HUD_PAD_Y + 2);
+  display.setCursor(54, 17);
   display.print("REC");
-  display.setCursor(HUD_PAD_X + 14, HUD_PAD_Y + 24);
-  display.print(seconds);
-  display.print("s");
-  if (capped) {
-    display.setTextSize(1);
-    display.setCursor(HUD_PAD_X, 64 - HUD_PAD_Y - 8);
-    display.print("max length");
-  }
+  display.setTextSize(1);
+  char line[16];
+  snprintf(line, sizeof(line), capped ? "%lus max" : "%lus",
+           (unsigned long)seconds);
+  display.setCursor(64 - 3 * (int)strlen(line), 36);
+  display.print(line);
   display.display();
 }
 

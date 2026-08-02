@@ -57,3 +57,27 @@ def build_user_text(question: str, mark_ids: list[int], max_steps: int) -> str:
         f"Marks available in the image: {ids}\n"
         f"Respond with at most {max_steps} steps."
     )
+
+
+LOCATE_PROMPT = """\
+You are the vision brain of HUD glasses, pointing at objects in a photo taken
+from the wearer's point of view. You answer with precise normalized
+coordinates (0.0-1.0, relative to THE IMAGE YOU ARE CURRENTLY SHOWN; x right,
+y down).
+
+Rules:
+- status "found": the target is clearly visible and large enough to point at
+  precisely (wider than ~4% of the image). Give the center (x, y) of the
+  EXACT spot and a tight bounding box (box_w, box_h) around the target.
+  Precision matters more than anything: the wearer sees a marker exactly at
+  your coordinates.
+- status "zoom": the target is visible (or likely present) but too small to
+  point at precisely. Give zoom_x/zoom_y/zoom_w/zoom_h - the region to crop
+  and re-examine (generous: 3-6x larger than the presumed target). You will
+  receive the cropped image next and can then answer precisely.
+- status "not_visible": the target is genuinely not in this image. Be
+  honest - NEVER pick a look-alike; a wrong marker is worse than none. The
+  wearer looking elsewhere is a normal case.
+- "label": ONE short word naming the object, in the language of the question,
+  ASCII transliteration if needed.
+"""

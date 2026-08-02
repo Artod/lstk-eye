@@ -458,32 +458,41 @@ def test_refinement_without_photo_reuses_active_capture(rig):
     planner.plan = lambda *a, **k: (called.append(1), original(*a, **k))[1]
 
     glasses.capture(make_test_image())
-    first = glasses.ask(text="find the tulip in the scene")
+    first = glasses.ask(text="how do I check battery voltage")
     n1 = len(called)
-    assert first.active and n1 >= 1  # refine may add a second planner call
+    assert first.active and n1 >= 1
 
-    followup = glasses.ask(text="find the red tulip instead please")
+    followup = glasses.ask(text="what about the resistance dial then")
     assert followup.active
     n2 = len(called)
     assert n2 > n1, "the pipeline must rerun on the retained capture"
     assert not any("no photo" in t for t in _texts(followup.scene))
 
-    # A fresh click still takes priority as the new context.
+    # A fresh click ends tracking; the next ask uses the new photo.
     glasses.capture(make_test_image())
-    glasses.ask(text="find the vase next to everything")
+    glasses.ask(text="how do I measure current with it")
     assert len(called) > n2
 
 
-def test_coarse_find_answer_gets_refined(rig):
-    """A find-answer anchored to a huge mask triggers a zoomed second pass;
-    the final anchor comes from the refined (synthetic-id) mask."""
+def test_find_question_routes_to_direct_pointing(rig):
+    """Find-questions go through planner.locate (direct coordinates, no
+    segmentation in the critical path); the slide carries the model's box."""
     glasses, app = rig
     glasses.capture(make_test_image())
     resp = glasses.ask(text="find the dial on this thing")
     assert resp.active
     sess = _session(app)
     slide = sess._slides[0]
-    # The mock planner picks the largest mask (the multimeter body, huge),
-    # so the refine pass must have replaced it with a crop-level mask.
-    assert slide.mark_id is not None and slide.mark_id >= 1000
-    assert slide.size is not None and slide.size[0] < 0.6
+    assert slide.mark_id is None, "locate answers are not mask-anchored"
+    assert slide.anchor == (0.5, 0.5)
+    assert slide.size == (0.2, 0.2)
+    assert sess._tracker is not None, "tracking must work from the model's box"
+
+
+def test_locate_not_visible_is_honest(rig):
+    glasses, app = rig
+    glasses.capture(make_test_image())
+    resp = glasses.ask(text="find nothing of interest here")
+    texts = _texts(resp.scene)
+    assert any("not in view" in t for t in texts)
+    assert not any(e.t == "target" for e in resp.scene.els)

@@ -289,3 +289,55 @@ def test_claude_cli_missing_binary_raises(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(PlanningError, match="not found"):
         cli_planner().plan(PNG, QUESTION, [make_mask(1, 0.1)])
+
+
+import types
+
+
+class _FakeParse:
+    """Sequence of canned parsed_output objects for messages.parse."""
+
+    def __init__(self, outputs):
+        self._outputs = list(outputs)
+        self.calls = []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        return types.SimpleNamespace(
+            stop_reason="end_turn", parsed_output=self._outputs.pop(0)
+        )
+
+
+def test_locate_zoom_loop_maps_coordinates_back():
+    """A zoom into region (0.5, 0.5, 0.4, 0.4) followed by 'found at the crop
+    center' must resolve to absolute (0.7, 0.7)."""
+    import numpy as np
+
+    from lstk_eye.pipeline.planner.anthropic_planner import AnthropicPlanner, _LocateOut
+
+    outputs = [
+        _LocateOut(status="zoom", label="clit", zoom_x=0.5, zoom_y=0.5, zoom_w=0.4, zoom_h=0.4),
+        _LocateOut(status="found", label="clit", x=0.5, y=0.5, box_w=0.25, box_h=0.25),
+    ]
+    fake = _FakeParse(outputs)
+    planner = AnthropicPlanner(
+        PlannerConfig(), client=types.SimpleNamespace(messages=fake)
+    )
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    res = planner.locate(frame, "find the tiny thing")
+    assert res.found and res.label == "clit"
+    assert abs(res.point[0] - 0.7) < 1e-6 and abs(res.point[1] - 0.7) < 1e-6
+    # The box is scaled by the zoom region: 0.25 * 0.4 = 0.1.
+    assert abs(res.bbox[2] - 0.1) < 1e-6
+    assert len(fake.calls) == 2, "exactly one zoom round trip"
+
+
+def test_locate_honest_not_visible():
+    import numpy as np
+
+    from lstk_eye.pipeline.planner.anthropic_planner import AnthropicPlanner, _LocateOut
+
+    fake = _FakeParse([_LocateOut(status="not_visible", label="tulip")])
+    planner = AnthropicPlanner(PlannerConfig(), client=types.SimpleNamespace(messages=fake))
+    res = planner.locate(np.zeros((480, 640, 3), dtype=np.uint8), "find the tulip")
+    assert not res.found and res.label == "tulip"

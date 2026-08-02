@@ -8,7 +8,7 @@ largest marks. No API calls, always a stable, valid plan.
 """
 
 from lstk_eye.pipeline.interfaces import Planner
-from lstk_eye.pipeline.types import Plan, PlanStep, SegMask
+from lstk_eye.pipeline.types import LocateResult, Plan, PlanStep, SegMask
 
 _LABELS = ("Red probe here", "Black probe here", "Set dial to V= 20")
 _SUMMARY = "mock plan"
@@ -40,3 +40,12 @@ class MockPlanner(Planner):
             for mask, label in zip(largest, _LABELS, strict=False)
         ]
         return Plan(steps=steps, summary=_SUMMARY)
+
+    def locate(self, image_bgr, question, history=None):
+        """Deterministic direct pointing: center of the frame unless the
+        question mentions "nothing" (simulates an honest not-visible)."""
+        if "nothing" in question.lower():
+            return LocateResult(found=False, label="nothing")
+        return LocateResult(
+            found=True, label="Here", point=(0.5, 0.5), bbox=(0.4, 0.4, 0.2, 0.2)
+        )

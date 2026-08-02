@@ -186,7 +186,11 @@ class TemplateTracker(TargetTracker):
                 self._pending = None
 
         return MatchResult(
-            found=self._visible, center=self._center, confidence=conf, scale=self._scale
+            found=self._visible,
+            center=self._center,
+            confidence=conf,
+            scale=self._scale,
+            misses=self._misses,
         )
 
     def _update_center(self, measured: tuple[float, float]) -> None:

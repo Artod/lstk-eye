@@ -49,23 +49,20 @@ def test_mid_session_ask_without_photo_keeps_session_alive(glasses):
     assert polled.active
 
 
-def test_photo_during_session_does_not_clobber_slide(glasses):
-    """Scenes replace each other and nothing restores the slide, so a
-    mid-session capture must not push a photo-counter scene."""
+def test_photo_during_session_switches_to_photo_state(glasses):
+    """A new capture means the wearer moved on: the tracking view ends (the
+    device stops previews on the next response), the photo state shows, and
+    the chat history survives for the follow-up ask."""
     glasses.capture(make_test_image())
     start = glasses.ask(text="how do I check battery voltage")
-    slide_seq = start.scene.seq
+    assert start.active
 
     ack = glasses.capture(make_test_image())
     assert ack.count == 1
-    # The current scene survives with a photo-count badge appended - the
-    # answer is never wiped by a full photo-counter screen.
-    assert ack.scene is not None
-    slide_texts = {e.text for e in start.scene.els if e.t == "text"}
-    ack_texts = {e.text for e in ack.scene.els if e.t == "text"}
-    assert "[1]" in ack_texts
-    assert slide_texts <= ack_texts, "the answer content must survive the capture"
-    assert ack.scene.seq > slide_seq
+    texts = {e.text for e in ack.scene.els if e.t == "text"}
+    assert "photo saved" in texts
+    polled = glasses.poll_scene(-1)
+    assert not polled.active, "tracking must end when a new photo arrives"
 
 
 def test_stt_empty_language_means_autodetect():

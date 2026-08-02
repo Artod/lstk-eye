@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from lstk_eye.pipeline.types import MatchResult, Plan, SegMask, Transcript
+from lstk_eye.pipeline.types import LocateResult, MatchResult, Plan, SegMask, Transcript
 
 
 class SpeechToText(ABC):
@@ -50,6 +50,18 @@ class Planner(ABC):
         marks: list[SegMask],
         history: list[tuple[str, str]] | None = None,
     ) -> Plan: ...
+
+    def locate(
+        self,
+        image_bgr: np.ndarray,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> LocateResult | None:
+        """Direct pointing for find-this questions: the model returns the
+        target's normalized center/box itself, zooming into crops as needed -
+        works at any object scale without segmentation in the critical path.
+        Default: unsupported (None) - the caller falls back to Set-of-Marks."""
+        return None
 
 
 class TargetTracker(ABC):

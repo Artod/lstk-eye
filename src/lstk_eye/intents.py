@@ -59,3 +59,14 @@ def normalize_words(text: str) -> list[str]:
     """Public wrapper: lowercase, strip punctuation, split into words. Empty
     result means the utterance carries no content (silence, emoji, noise)."""
     return _normalize(text)
+
+
+_LOCATE_STEMS = (
+    "find", "locate", "where", "point", "show", "track", "highlight",
+    "найд", "найти", "где", "покаж", "подсвет", "трек", "укаж",
+)
+
+
+def is_locate_request(text: str) -> bool:
+    """Find-this questions route to the direct-pointing pipeline."""
+    return any(w.startswith(_LOCATE_STEMS) for w in _normalize(text))
