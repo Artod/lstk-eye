@@ -148,13 +148,17 @@ void loop() {
     delay(1000);
     return;
   }
-  // Recording is deliberately not interrupted by a WiFi drop; the ask will
-  // fail visibly instead.
-  if (state != ST_RECORDING && !net_connected()) {
-    hud_message("WiFi", "reconnecting...");
-    if (!net_connect(wifi_status)) {
-      delay(2000);
-      return;
+  // Non-blocking connection keeper: the button FSM must keep running while
+  // WiFi is down (offline photo counting still works), so reconnect attempts
+  // never block the loop. The HUD note is drawn only on the transition.
+  static bool was_online = true;
+  const bool online = net_ensure();
+  if (online != was_online) {
+    was_online = online;
+    if (!online && state != ST_RECORDING) {
+      hud_message("WiFi down", "retrying in bg");
+    } else if (online && state == ST_IDLE) {
+      hud_message("WiFi", "connected");
     }
   }
 

@@ -9,6 +9,7 @@
 namespace {
 
 String base_url;
+uint32_t last_begin_ms = 0;
 
 String resolve_host() {
   String host = SERVER_HOST;
@@ -88,6 +89,29 @@ bool net_connect(void (*status_cb)(const char*)) {
 
 bool net_connected() {
   return WiFi.status() == WL_CONNECTED;
+}
+
+bool net_ensure() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (base_url.length() == 0) {
+      // First moment of connectivity (e.g. the blocking setup() attempt timed
+      // out and the link came up later): resolve the server host now.
+      const String host = resolve_host();
+      base_url = String("http://") + host + ":" + SERVER_PORT;
+    }
+    return true;
+  }
+  const uint32_t now = millis();
+  // Re-kick the connection at most every 10 s. Calling WiFi.begin while a
+  // previous attempt is still in flight logs "cannot set config" noise, so
+  // disconnect first and space the attempts out.
+  if (last_begin_ms == 0 || now - last_begin_ms >= 10000) {
+    last_begin_ms = now;
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
+  return false;
 }
 
 NetResult net_get(const String& path) {

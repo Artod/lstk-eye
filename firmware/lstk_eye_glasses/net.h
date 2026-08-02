@@ -15,8 +15,15 @@ struct NetResult {
 };
 
 // Connect to WiFi (blocking, WIFI_TIMEOUT_MS) and resolve the server host.
-// status_cb receives short progress strings for the HUD.
+// status_cb receives short progress strings for the HUD. Used once in setup()
+// so the user sees connect progress; afterwards loop() uses net_ensure().
 bool net_connect(void (*status_cb)(const char*));
+
+// Non-blocking connection keeper for loop(): returns true when WiFi is up
+// (resolving the server host lazily if needed); when down, re-kicks
+// WiFi.begin at most every 10 s and returns immediately. Never blocks, so
+// the button FSM keeps running while offline.
+bool net_ensure();
 
 bool net_connected();
 
