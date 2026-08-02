@@ -26,6 +26,14 @@ class WhisperSpeechToText(SpeechToText):
         self._init_lock = threading.Lock()
 
     def transcribe(self, wav: bytes) -> Transcript:
+        try:
+            return self._transcribe(wav)
+        except PipelineError:
+            raise
+        except Exception as e:  # backend/codec errors must stay readable
+            raise PipelineError("could not decode speech - try again") from e
+
+    def _transcribe(self, wav: bytes) -> Transcript:
         if self._model is None:
             with self._init_lock:
                 if self._model is None:

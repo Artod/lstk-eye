@@ -117,8 +117,9 @@ _ROTATE_CODES = {
 }
 
 
-def _decode(jpeg: bytes, rotation: int, gray: bool = False) -> np.ndarray:
-    """Decode a device frame and normalize it upright per camera.rotation.
+def _decode(jpeg: bytes, cam, gray: bool = False) -> np.ndarray:
+    """Decode a device frame and normalize it upright per the camera config
+    (rotation, then mirror flags).
 
     Every frame - capture or preview, chat or calibration - passes through
     here, so downstream code (segmentation, tracking, calibration, display
@@ -127,8 +128,12 @@ def _decode(jpeg: bytes, rotation: int, gray: bool = False) -> np.ndarray:
     img = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), flags)
     if img is None:
         raise PipelineError("could not decode image")
-    if rotation:
-        img = cv2.rotate(img, _ROTATE_CODES[rotation])
+    if cam.rotation:
+        img = cv2.rotate(img, _ROTATE_CODES[cam.rotation])
+    if cam.flip_v:
+        img = cv2.flip(img, 0)
+    if cam.flip_h:
+        img = cv2.flip(img, 1)
     return img
 
 
@@ -162,7 +167,7 @@ class DeviceSession:
         self._prompt_until: float | None = None
 
     def _decode(self, jpeg: bytes, gray: bool = False) -> np.ndarray:
-        return _decode(jpeg, self._rt.cfg.camera.rotation, gray=gray)
+        return _decode(jpeg, self._rt.cfg.camera, gray=gray)
 
     def _restore_slide_after_prompt(self) -> None:
         self._prompt_until = time.monotonic() + PROMPT_SECONDS
@@ -350,6 +355,11 @@ class DeviceSession:
             "target" if len(slides) == 1 and slides[0].anchor is not None else "arrow"
         )
         answer = plan.summary or "; ".join(s.label for s in plan.steps)
+        log.info(
+            "[%s] ask %r -> %d steps: %s (style=%s, marks=%d)",
+            self.device_id, question, len(slides),
+            "; ".join(s.label for s in slides), self._style, len(masks),
+        )
         self._history.append((question, answer))
         self._history = self._history[-MAX_HISTORY:]
         self._mask_by_id = mask_by_id
@@ -373,6 +383,8 @@ class DeviceSession:
                 return SceneResponse(scene=scene, active=self.active)
 
     def _event_locked(self, event_type: str) -> SceneResponse:
+        log.info("[%s] event %s (active=%s, calib=%s)",
+                 self.device_id, event_type, self.active, self._calib is not None)
         if event_type == "reset":
             # Double click: the chat is over - session, history, photo
             # buffer, and any in-flight calibration all go. Aborting a

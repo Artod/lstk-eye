@@ -37,6 +37,17 @@ def serve(
     import uvicorn
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # Every serve run also writes a session log under runs/logs/ - the replay
+    # record for debugging field tests (questions, plans, events, calibration).
+    log_dir = Path("runs") / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    session_log = log_dir / f"session_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    handler = logging.FileHandler(session_log, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logging.getLogger().addHandler(handler)
+    logging.getLogger("uvicorn.access").addHandler(handler)
 
     from lstk_eye.server import create_app
 

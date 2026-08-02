@@ -31,6 +31,15 @@ _PAD = 0.15
 # pixels on either axis (too little structure to correlate).
 _MIN_TEMPLATE_PX = 8
 
+# Temporal consistency: after the target was lost, re-appearing requires two
+# consecutive confident matches whose centers agree within this normalized
+# distance - a single high-scoring random blob (same-colored clothing) jumps
+# around and never passes. While visible, a confident match further than
+# _OUTLIER_EPS from the smoothed center in one frame is treated as a miss
+# instead of teleporting the marker.
+_CONSIST_EPS = 0.08
+_OUTLIER_EPS = 0.20
+
 
 class TemplateTracker(TargetTracker):
     """Tracks one target across preview frames via template matching."""
@@ -53,6 +62,9 @@ class TemplateTracker(TargetTracker):
         self._visible = True
         self._misses = 0
         self._center: tuple[float, float] | None = None
+        # Last confident-but-unconfirmed candidate while hidden (temporal
+        # consistency check for re-appearing).
+        self._pending: tuple[float, float] | None = None
 
     def update(self, frame_gray: np.ndarray) -> MatchResult:
         frame_h, frame_w = frame_gray.shape[:2]
@@ -78,30 +90,59 @@ class TemplateTracker(TargetTracker):
                 )
 
         conf = 0.0 if best_conf is None else best_conf
+        confident = best_center is not None and conf >= self._cfg.appear_conf
+        plausible = best_center is not None and conf >= self._cfg.disappear_conf
 
-        # Anchor position: EMA-smoothed, updated only on frames confident
-        # enough that the peak is plausibly the target.
-        if best_center is not None and conf >= self._cfg.disappear_conf:
-            if self._center is None:
-                self._center = best_center
+        outlier = (
+            plausible
+            and self._center is not None
+            and abs(best_center[0] - self._center[0]) + abs(best_center[1] - self._center[1])
+            > _OUTLIER_EPS
+        )
+
+        if self._visible:
+            if confident and not outlier:
+                self._misses = 0
+                self._update_center(best_center)
+            elif plausible and not outlier:
+                # Dead band: hold state; still track the position gently.
+                self._update_center(best_center)
             else:
-                e = self._cfg.ema
-                self._center = (
-                    e * best_center[0] + (1.0 - e) * self._center[0],
-                    e * best_center[1] + (1.0 - e) * self._center[1],
-                )
-
-        # Hysteresis: appear fast, disappear lazily.
-        if conf >= self._cfg.appear_conf:
-            self._visible = True
-            self._misses = 0
-        elif conf < self._cfg.disappear_conf:
-            self._misses += 1
-            if self._misses >= self._cfg.miss_hide:
-                self._visible = False
-        # Dead band between the thresholds: hold state, count nothing.
+                # Low confidence OR a teleporting "match": both are misses.
+                self._misses += 1
+                if self._misses >= self._cfg.miss_hide:
+                    self._visible = False
+                    self._pending = None
+        else:
+            # Re-appearing needs two consecutive confident matches that agree
+            # on position - random look-alike peaks jump and never do.
+            if confident:
+                if (
+                    self._pending is not None
+                    and abs(best_center[0] - self._pending[0])
+                    + abs(best_center[1] - self._pending[1])
+                    < _CONSIST_EPS
+                ):
+                    self._visible = True
+                    self._misses = 0
+                    self._center = best_center
+                    self._pending = None
+                else:
+                    self._pending = best_center
+            else:
+                self._pending = None
 
         return MatchResult(found=self._visible, center=self._center, confidence=conf)
+
+    def _update_center(self, measured: tuple[float, float]) -> None:
+        if self._center is None:
+            self._center = measured
+            return
+        e = self._cfg.ema
+        self._center = (
+            e * measured[0] + (1.0 - e) * self._center[0],
+            e * measured[1] + (1.0 - e) * self._center[1],
+        )
 
 
 class TemplateRelocalizerFactory(RelocalizerFactory):

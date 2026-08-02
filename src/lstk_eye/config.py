@@ -63,6 +63,11 @@ class CameraConfig(BaseModel):
     ingestion, so the whole pipeline works in upright coordinates."""
 
     rotation: Literal[0, 90, 180, 270] = 0
+    # Sensor mirror flags, applied AFTER rotation. Diagnose from calibration:
+    # a negative fitted window on exactly one axis means that axis is
+    # mirrored (flip_v for height, flip_h for width).
+    flip_v: bool = False
+    flip_h: bool = False
 
 
 class SegmenterConfig(BaseModel):

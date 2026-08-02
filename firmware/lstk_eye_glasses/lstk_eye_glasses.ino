@@ -42,7 +42,7 @@ struct NetJob {
 struct NetResultMsg {
   JobType type;
   bool ok;
-  char body[3072];
+  char body[2048];
 };
 
 static DeviceState state = ST_IDLE;
@@ -72,7 +72,8 @@ static void wifi_status(const char* msg) {
 // --- worker task (core 0): all camera captures and HTTP ---
 
 static void push_result(JobType type, bool ok, const String& body) {
-  NetResultMsg msg;
+  // Static: a 2 KB struct has no business on the worker's stack.
+  static NetResultMsg msg;
   msg.type = type;
   msg.ok = ok;
   strlcpy(msg.body, body.c_str(), sizeof(msg.body));
@@ -133,7 +134,7 @@ static void worker_task(void*) {
       NetResult r = net_post_jpeg(api_with_seq("/api/v1/preview"), fb->buf, fb->len);
       cam_release(fb);
       if (r.ok && r.body.length() > 0) {
-        NetResultMsg msg;
+        static NetResultMsg msg;
         msg.type = (JobType)0xFF;  // preview marker, see apply_result
         msg.ok = true;
         strlcpy(msg.body, r.body.c_str(), sizeof(msg.body));
@@ -237,7 +238,7 @@ void setup() {
     hud_message("lstk-eye " FW_VERSION,
                 health.ok ? "server ok" : "server unreachable");
   }
-  xTaskCreatePinnedToCore(worker_task, "net", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(worker_task, "net", 16384, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
@@ -303,7 +304,7 @@ void loop() {
       break;
   }
 
-  NetResultMsg msg;
+  static NetResultMsg msg;
   while (xQueueReceive(q_results, &msg, 0) == pdTRUE) {
     apply_result(msg);
   }

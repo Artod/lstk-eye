@@ -129,14 +129,45 @@ def test_disappear_is_lazy_exactly_miss_hide(cfg, rng):
         assert res.found is expected, f"after {i} misses expected found={expected}"
 
 
-def test_reappear_is_immediate(cfg, rng):
+def test_reappear_needs_two_consistent_frames(cfg, rng):
+    """After a loss, one confident frame is not enough (a look-alike blob can
+    score once); two consecutive confident matches that agree on position
+    re-show the target."""
     tracker = _new_tracker(cfg, rng)
     tracker.update(_preview((0.5, 0.5), rng))
     for _ in range(cfg.miss_hide):
         tracker.update(_background(PREVIEW_W, PREVIEW_H, rng))
-    res = tracker.update(_preview((0.45, 0.55), rng))
-    assert res.found
-    assert res.confidence >= cfg.appear_conf
+    first = tracker.update(_preview((0.45, 0.55), rng))
+    assert not first.found, "a single confident frame must not re-show"
+    second = tracker.update(_preview((0.45, 0.55), rng))
+    assert second.found
+    assert second.confidence >= cfg.appear_conf
+
+
+def test_reappear_rejects_jumping_candidates(cfg, rng):
+    """Confident matches at wildly different positions (random look-alikes)
+    never satisfy the consistency check."""
+    tracker = _new_tracker(cfg, rng)
+    tracker.update(_preview((0.5, 0.5), rng))
+    for _ in range(cfg.miss_hide):
+        tracker.update(_background(PREVIEW_W, PREVIEW_H, rng))
+    positions = [(0.2, 0.3), (0.7, 0.6), (0.3, 0.8), (0.8, 0.2)]
+    for pos in positions:
+        res = tracker.update(_preview(pos, rng))
+        assert not res.found, f"jumping candidate at {pos} must not re-show"
+
+
+def test_visible_teleport_counts_as_miss(cfg, rng):
+    """While visible, a confident match that teleports far from the smoothed
+    center is an outlier: the marker holds instead of jumping."""
+    tracker = _new_tracker(cfg, rng)
+    for _ in range(4):
+        res = tracker.update(_preview((0.35, 0.5), rng))
+    settled = res.center
+    res = tracker.update(_preview((0.80, 0.5), rng))  # 0.45 jump > outlier gate
+    assert res.found, "one outlier only spends miss budget"
+    assert res.center is not None
+    assert abs(res.center[0] - settled[0]) < 0.02, "the marker must not teleport"
 
 
 def test_center_none_until_first_confident_match(cfg, rng):
@@ -153,7 +184,7 @@ def test_center_none_until_first_confident_match(cfg, rng):
 
 def test_ema_center_moves_monotonically_after_jump(cfg, rng):
     tracker = _new_tracker(cfg, rng)
-    a, b = (0.35, 0.5), (0.62, 0.5)
+    a, b = (0.40, 0.5), (0.55, 0.5)  # jump below the outlier gate
     for _ in range(6):
         tracker.update(_preview(a, rng))
     dists = []
