@@ -32,7 +32,11 @@ def serve(
     port: int | None = typer.Option(None, help="Port (default from config)"),
 ):
     """Run the glasses server."""
+    import logging
+
     import uvicorn
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     from lstk_eye.server import create_app
 

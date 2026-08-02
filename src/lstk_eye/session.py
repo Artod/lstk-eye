@@ -25,7 +25,7 @@ import numpy as np
 
 from lstk_eye.calibration import WindowCalibration
 from lstk_eye.config import AppConfig, CalibrationConfig, save_calibration
-from lstk_eye.display import CHAR_W, SceneComposer
+from lstk_eye.display import CHAR_W, CROSSHAIR_R, SceneComposer
 from lstk_eye.errors import ConfigError, LstkError, PipelineError
 from lstk_eye.intents import is_calibration_request, match_intent, normalize_words
 from lstk_eye.pipeline import factories
@@ -527,7 +527,10 @@ class DeviceSession:
     def _start_calibration(self) -> AskResponse:
         comp = self._rt.composer
         cx, cy = comp.center
-        points = [(cx, cy), (comp.x1 - 6, cy), (cx, comp.y0 + 6)]
+        # Points sit a full bracket inside the visible area - a crosshair
+        # with clipped corners cannot be aimed at.
+        inset = CROSSHAIR_R + 2
+        points = [(cx, cy), (comp.x1 - inset, cy), (cx, comp.y0 + inset)]
         was_chatting = self.active and bool(self._slides)
         self._calib = _CalibState(points)
         if was_chatting:
@@ -593,8 +596,8 @@ class DeviceSession:
         try:
             fitted = WindowCalibration.fit(calib.pairs)
             if not (
-                0.05 < fitted.window_w < 2.0
-                and 0.05 < fitted.window_h < 2.0
+                0.05 < abs(fitted.window_w) < 2.0
+                and 0.05 < abs(fitted.window_h) < 2.0
                 and -0.5 < fitted.center_x < 1.5
                 and -0.5 < fitted.center_y < 1.5
             ):
@@ -606,7 +609,7 @@ class DeviceSession:
             log.warning("calibration fit rejected: %s", e)
             calib.pairs.clear()
             calib.idx = 0
-            return self._crosshair("odd data - redo 1/3")
+            return self._crosshair("calib failed-redo 1")
 
         # Mutate the shared calibration in place: the composer and every
         # session hold references to this object.
@@ -637,7 +640,11 @@ class DeviceSession:
             except OSError:
                 log.warning("could not persist calibration", exc_info=True)
                 note = "save failed"
-        return self._set_scene(self._rt.composer.status("calibrated", self._next_seq(), note))
+        if abs(cal.window_w) > 1.0 or abs(cal.window_h) > 1.0:
+            log.warning("calibration window suspiciously large - verify camera.rotation")
+        return self._set_scene(
+            self._rt.composer.status("calibrated", self._next_seq(), "hold btn + ask")
+        )
 
     def _finish(self, message: str) -> DisplayScene:
         self.active = False

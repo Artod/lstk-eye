@@ -54,7 +54,7 @@ this is right.
 | `marker near edge` | About to leave the camera frame | Re-center your head on the marker |
 | `busy: 2click exits` | You asked something mid-calibration | Finish or double-click out |
 | `bad photo - again` | Corrupt capture | Click again |
-| `odd data - redo 1/3` | The three points did not form a sane solution | Flow restarted; redo all three |
+| `calib failed-redo 1` | The three points did not form a sane solution | Flow restarted; redo all three |
 
 A click only counts on `marker OK` - clicking on any other line keeps you on
 the same point. Saying "calibrate" again restarts from point 1; double click

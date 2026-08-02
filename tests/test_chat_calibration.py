@@ -142,7 +142,14 @@ def test_calibration_flow_end_to_end(rig, cfg):
     # display point it was aligned with (composer center etc. for default pads).
     cal = app.state.runtime.calibration
     comp = app.state.runtime.composer
-    expected = [comp.center, (comp.x1 - 6, comp.center[1]), (comp.center[0], comp.y0 + 6)]
+    from lstk_eye.display import CROSSHAIR_R
+
+    inset = CROSSHAIR_R + 2
+    expected = [
+        comp.center,
+        (comp.x1 - inset, comp.center[1]),
+        (comp.center[0], comp.y0 + inset),
+    ]
     for cam, disp in zip(cam_points, expected, strict=True):
         got = cal.to_display(cam)
         assert abs(got[0] - disp[0]) <= 1 and abs(got[1] - disp[1]) <= 1
@@ -390,3 +397,49 @@ def test_reset_during_calibration_says_calibration_off(rig):
     assert any("calibration off" in t for t in _texts(done.scene))
     idle_done = glasses.reset()
     assert any("done" in t for t in _texts(idle_done.scene))
+
+
+def test_calibration_accepts_flipped_camera(rig, cfg):
+    """A camera whose rotation config is 180 degrees off produces a mirrored
+    mapping (negative windows). That is a valid affine model - calibration
+    must succeed and map the collected points correctly, not reject with
+    'calib failed'."""
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    comp = app.state.runtime.composer
+    from lstk_eye.display import CROSSHAIR_R
+
+    inset = CROSSHAIR_R + 2
+    disp = [comp.center, (comp.x1 - inset, comp.center[1]), (comp.center[0], comp.y0 + inset)]
+    # Display moves right/up while the camera sees left/down: inverted axes.
+    cam = [(0.6, 0.55), (0.45, 0.55), (0.6, 0.65)]
+    for cx, cy in cam:
+        ack = glasses.capture(_frame_with_marker(cx, cy))
+    assert "calibrated" in _texts(ack.scene)
+    cal = app.state.runtime.calibration
+    assert cal.window_w < 0 and cal.window_h < 0
+    for c, d in zip(cam, disp, strict=True):
+        got = cal.to_display(c)
+        assert abs(got[0] - d[0]) <= 1 and abs(got[1] - d[1]) <= 1
+
+
+def test_crosshair_brackets_fully_visible(rig, cfg):
+    glasses, app = rig
+    comp = app.state.runtime.composer
+    from lstk_eye.display import CROSSHAIR_R
+
+    glasses.ask(text="calibrate")
+    sess = app.state.sessions.get("sim")
+    for x, y in sess._calib.points:
+        assert x - CROSSHAIR_R >= comp.x0 and x + CROSSHAIR_R <= comp.x1
+        assert y - CROSSHAIR_R >= comp.y0 and y + CROSSHAIR_R <= comp.y1
+
+
+def test_calibration_success_names_next_action(rig):
+    glasses, _ = rig
+    glasses.ask(text="calibrate")
+    for c in [(0.55, 0.5), (0.75, 0.5), (0.55, 0.35)]:
+        ack = glasses.capture(_frame_with_marker(*c))
+    texts = _texts(ack.scene)
+    assert "calibrated" in texts
+    assert any("hold btn" in t for t in texts), "the end must state what to do next"

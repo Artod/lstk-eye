@@ -36,6 +36,9 @@ ARROW_LENGTH = 12
 ERROR_MAX_LINES = 4
 TARGET_R_MIN = 6
 TARGET_R_MAX = 22
+# Calibration crosshair bracket half-size; calibration points are inset from
+# the visible border by this plus a margin so brackets always render whole.
+CROSSHAIR_R = 12
 
 
 def wrap_text(text: str, width: int, max_lines: int = 2) -> list[str]:
@@ -195,8 +198,8 @@ class SceneComposer:
             instr_y, status_row = self.y0, self.y0 + LINE_H
         els: list[DisplayElement] = [
             # Sized so a phone-displayed marker at working distance fills the
-            # brackets: the alignment semantic is "fit the marker inside".
-            TargetEl(x=px[0], y=px[1], r=16),
+            # brackets: the alignment semantic is "make the marker fill them".
+            TargetEl(x=px[0], y=px[1], r=CROSSHAIR_R),
             TextEl(x=self.x0, y=instr_y, text=instruction),
         ]
         if status:
