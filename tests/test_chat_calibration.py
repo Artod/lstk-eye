@@ -166,3 +166,69 @@ def test_calibration_cancelled_by_reset(rig, cfg):
     assert _session(app)._calib is not None
     glasses.reset()
     assert _session(app)._calib is None
+
+
+def test_calibration_live_preview_feedback(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    blank = np.full((480, 640, 3), 255, dtype=np.uint8)
+
+    resp = glasses.preview(blank, last_seq=0)
+    assert resp.active
+    assert any("no marker" in t for t in _texts(resp.scene))
+
+    resp = glasses.preview(_frame_with_marker(0.5, 0.5), last_seq=resp.scene.seq)
+    assert any("marker OK" in t for t in _texts(resp.scene))
+
+    # Unchanged state does not churn the scene.
+    again = glasses.preview(_frame_with_marker(0.5, 0.5), last_seq=resp.scene.seq)
+    assert again.scene is None
+
+
+def test_calibration_rejects_small_and_edge_markers(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+
+    tiny = glasses.capture(_frame_with_marker(0.5, 0.5, size=30))  # 30/640 < 0.06
+    assert any("closer" in t for t in _texts(tiny.scene))
+    assert _session(app)._calib.idx == 0, "rejected click must not advance"
+
+    edge = glasses.capture(_frame_with_marker(0.055, 0.5, size=60))
+    assert any("near edge" in t for t in _texts(edge.scene))
+    assert _session(app)._calib.idx == 0
+
+    good = glasses.capture(_frame_with_marker(0.5, 0.5))
+    assert _session(app)._calib.idx == 1
+    assert any(e.t == "target" for e in good.scene.els)
+
+
+def test_calibration_frames_saved_for_debugging(rig, cfg):
+    glasses, _ = rig
+    glasses.ask(text="calibrate")
+    glasses.capture(np.full((480, 640, 3), 255, dtype=np.uint8))  # miss
+    glasses.capture(_frame_with_marker(0.5, 0.5))  # hit
+    calib_dir = cfg.storage.dir / "calibration"
+    names = sorted(p.name for p in calib_dir.iterdir())
+    assert any("miss" in n for n in names)
+    assert any("_ok" in n for n in names)
+    assert any("detect" in n for n in names)
+
+
+def test_small_photo_rejected_from_buffer(rig):
+    glasses, app = rig
+    qvga = cv2.resize(make_test_image(), (320, 240))
+    ack = glasses.capture(qvga)
+    assert ack.count == 0, "preview-sized frames must not enter the photo buffer"
+    assert any("bad photo" in t for t in _texts(ack.scene))
+
+    # The planner never sees it: an ask still reports no photo.
+    resp = glasses.ask(text="what is this object here")
+    assert any("no photo" in t for t in _texts(resp.scene))
+
+
+def test_error_scene_names_the_exit(rig, cfg):
+    from lstk_eye.server import create_app as _make
+
+    comp_scene = _make(cfg).state.runtime.composer.error("boom", seq=1)
+    texts = [e.text for e in comp_scene.els if e.t == "text"]
+    assert any("2click = reset" in t for t in texts)

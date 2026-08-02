@@ -174,19 +174,32 @@ class SceneComposer:
         return TargetEl(x=x, y=y, r=max(r, 3))
 
     def calibration_point(
-        self, index: int, total: int, px: tuple[int, int], seq: int, hint: str | None = None
+        self,
+        index: int,
+        total: int,
+        px: tuple[int, int],
+        seq: int,
+        status: str | None = None,
     ) -> DisplayScene:
-        """One calibration crosshair: small brackets at ``px`` plus the step
-        instruction on the status row (kept away from the crosshair)."""
-        instruction = hint or f"aim {index + 1}/{total} + click"
-        text_y = self.status_y if px[1] < self.center[1] else self.y0
-        return DisplayScene(
-            seq=seq,
-            els=[
-                TargetEl(x=px[0], y=px[1], r=5),
-                TextEl(x=self.x0, y=text_y, text=instruction),
-            ],
-        )
+        """One calibration crosshair.
+
+        Two text slots, kept clear of the crosshair: the step instruction
+        ("point 1/3 - click") and a live camera-feedback line ("marker OK" /
+        "no marker seen"), which is the wearer's only way to know whether a
+        click will land.
+        """
+        instruction = f"point {index + 1}/{total} - click"
+        if px[1] < self.center[1]:
+            instr_y, status_row = self.status_y - LINE_H, self.status_y
+        else:
+            instr_y, status_row = self.y0, self.y0 + LINE_H
+        els: list[DisplayElement] = [
+            TargetEl(x=px[0], y=px[1], r=5),
+            TextEl(x=self.x0, y=instr_y, text=instruction),
+        ]
+        if status:
+            els.append(TextEl(x=self.x0, y=status_row, text=status))
+        return DisplayScene(seq=seq, els=els)
 
     def photo_count(self, count: int, seq: int) -> DisplayScene:
         return DisplayScene(
@@ -207,11 +220,13 @@ class SceneComposer:
         return DisplayScene(seq=seq, els=els)
 
     def error(self, msg: str, seq: int) -> DisplayScene:
-        lines = wrap_text(f"! {msg}", self.chars_per_line, max_lines=ERROR_MAX_LINES)
+        lines = wrap_text(f"! {msg}", self.chars_per_line, max_lines=ERROR_MAX_LINES - 1)
         els: list[DisplayElement] = [
             TextEl(x=self.x0, y=self.y0 + 6 + i * LINE_H, text=line)
             for i, line in enumerate(lines)
         ]
+        # Every dead end states its exit.
+        els.append(TextEl(x=self.x0, y=self.status_y, text="2click = reset"))
         return DisplayScene(seq=seq, els=els)
 
     def blank(self, seq: int) -> DisplayScene:

@@ -51,3 +51,22 @@ class RunStore:
             )
         except OSError:
             log.warning("failed to save run for session %s", session_id, exc_info=True)
+
+    def save_calibration_frame(
+        self, point_idx: int, jpeg: bytes, annotated_bgr, ok: bool
+    ) -> None:
+        """Persist every calibration click (raw + detection overlay) under
+        runs/calibration/ so 'no marker' failures are inspectable."""
+        if not self._cfg.save_sessions:
+            return
+        try:
+            import cv2
+
+            calib_dir = self._cfg.dir / "calibration"
+            calib_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            tag = "ok" if ok else "miss"
+            (calib_dir / f"{stamp}_p{point_idx + 1}_{tag}.jpg").write_bytes(jpeg)
+            cv2.imwrite(str(calib_dir / f"{stamp}_p{point_idx + 1}_{tag}_detect.jpg"), annotated_bgr)
+        except OSError:
+            log.warning("failed to save calibration frame", exc_info=True)

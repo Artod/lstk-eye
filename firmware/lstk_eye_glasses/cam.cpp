@@ -26,17 +26,30 @@ camera_fb_t* capture_at(framesize_t size) {
   if (s == nullptr) {
     return nullptr;
   }
+  bool switched = false;
   if (size != current_size) {
     if (s->set_framesize(s, size) != 0) {
       return nullptr;
     }
     current_size = size;
+    switched = true;
+    // Give the sensor time to actually reconfigure before trusting frames.
+    delay(90);
   }
-  // With fb_count=2 + CAMERA_GRAB_LATEST the driver free-runs, so right after
-  // a size switch the queue can still hold frames at the OLD resolution (or
-  // one torn during sensor reconfig). Returning one of those would feed the
-  // planner a QVGA preview instead of the XGA photo. Flush until the frame
-  // actually matches the requested size.
+  if (switched) {
+    // The driver stamps frames with the CURRENT config, so a stale frame
+    // captured before the switch carries the new width in metadata while the
+    // JPEG payload is still the old resolution (observed on hardware: a
+    // QVGA preview delivered as the "XGA" photo). Width checks cannot catch
+    // that - unconditionally discard every queued buffer after a switch.
+    for (int i = 0; i < 2; ++i) {
+      camera_fb_t* stale = esp_camera_fb_get();
+      if (stale != nullptr) {
+        esp_camera_fb_return(stale);
+      }
+    }
+  }
+  // Belt and suspenders for frames whose metadata does disagree.
   const int want_w = width_for(size);
   for (int attempt = 0; attempt < 4; ++attempt) {
     camera_fb_t* fb = esp_camera_fb_get();

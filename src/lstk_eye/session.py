@@ -29,7 +29,7 @@ from lstk_eye.display import CHAR_W, SceneComposer
 from lstk_eye.errors import ConfigError, LstkError, PipelineError
 from lstk_eye.intents import is_calibration_request, match_intent
 from lstk_eye.pipeline import factories
-from lstk_eye.pipeline.fiducial import detect_target_center
+from lstk_eye.pipeline.fiducial import annotate_detection, detect_target
 from lstk_eye.pipeline.interfaces import TargetTracker
 from lstk_eye.pipeline.marks import encode_png, overlay_marks
 from lstk_eye.pipeline.types import SegMask, Slide
@@ -53,13 +53,39 @@ ANCHOR_EPS = 0.012
 MAX_HISTORY = 12
 
 
+# A photo whose decoded width is below this is not a capture (preview-sized
+# frames must never reach the planner).
+MIN_PHOTO_WIDTH = 600
+# Calibration marker acceptance: minimum apparent size (fraction of frame
+# width) and distance from the frame border.
+CALIB_MIN_MARKER = 0.06
+CALIB_EDGE_MARGIN = 0.06
+
+
 class _CalibState:
-    """In-flight calibration: crosshair points to show, pairs collected."""
+    """In-flight calibration: crosshair points to show, pairs collected, and
+    the last live-feedback line shown (to redraw only on change)."""
 
     def __init__(self, points: list[tuple[int, int]]):
         self.points = points
         self.pairs: list[tuple[tuple[float, float], tuple[int, int]]] = []
         self.idx = 0
+        self.status = "looking for marker"
+
+
+def _marker_status(found) -> tuple[str, bool]:
+    """(feedback line, click would be accepted) for a detection result."""
+    if found is None:
+        return "no marker seen", False
+    (cx, cy), size, _ = found
+    if size < CALIB_MIN_MARKER:
+        return "closer to marker", False
+    if not (
+        CALIB_EDGE_MARGIN < cx < 1 - CALIB_EDGE_MARGIN
+        and CALIB_EDGE_MARGIN < cy < 1 - CALIB_EDGE_MARGIN
+    ):
+        return "marker near edge", False
+    return "marker OK - click", True
 
 
 class Runtime:
@@ -128,6 +154,23 @@ class DeviceSession:
         with self._lock:
             if self._calib is not None:
                 return PhotoAck(count=len(self._photos), scene=self._calib_capture(jpeg))
+            # Guard the buffer: a preview-sized or undecodable frame must
+            # never become the capture the planner sees (the camera can emit
+            # a stale low-res frame right after a resolution switch).
+            try:
+                frame = _decode_bgr(jpeg)
+                width_ok = frame.shape[1] >= MIN_PHOTO_WIDTH
+            except PipelineError:
+                width_ok = False
+            if not width_ok:
+                log.warning("rejected photo (undecodable or below %d px wide)", MIN_PHOTO_WIDTH)
+                count = len(self._photos)
+                if self.active:
+                    return PhotoAck(count=count, scene=self._badge_scene("[!]"))
+                scene = self._set_scene(
+                    self._rt.composer.status("bad photo", self._next_seq(), "click again")
+                )
+                return PhotoAck(count=count, scene=scene)
             now = time.monotonic()
             self._photos = [(b, t) for b, t in self._photos if now - t < PHOTO_TTL_S]
             self._photos.append((jpeg, now))
@@ -137,15 +180,14 @@ class DeviceSession:
                 # Scenes replace each other, so a full photo-counter screen
                 # would wipe the answer. Acknowledge with a badge on the
                 # current scene instead.
-                return PhotoAck(count=count, scene=self._badge_scene(count))
+                return PhotoAck(count=count, scene=self._badge_scene(f"[{count}]"))
             scene = self._set_scene(self._rt.composer.photo_count(count, self._next_seq()))
             return PhotoAck(count=count, scene=scene)
 
-    def _badge_scene(self, count: int) -> DisplayScene:
-        """Re-issue the current scene with a photo-count badge on the status
-        row, replacing any previous badge."""
+    def _badge_scene(self, badge: str) -> DisplayScene:
+        """Re-issue the current scene with a short bracketed badge on the
+        status row, replacing any previous badge."""
         comp = self._rt.composer
-        badge = f"[{count}]"
         els = [
             e
             for e in self._scene.els
@@ -303,6 +345,15 @@ class DeviceSession:
         if not self._lock.acquire(blocking=False):
             return SceneResponse(scene=None, active=self.active)
         try:
+            if self._calib is not None:
+                # Live calibration feedback: every preview frame updates the
+                # "does the camera see the marker" line, so the wearer knows
+                # whether a click will land before clicking.
+                try:
+                    self._calib_preview(jpeg)
+                except PipelineError:
+                    log.debug("calibration preview rejected", exc_info=True)
+                return SceneResponse(scene=self._scene_if_newer(last_seq), active=True)
             if not self.active:
                 return SceneResponse(scene=self._scene_if_newer(last_seq), active=False)
             if self._tracker is not None:
@@ -391,40 +442,76 @@ class DeviceSession:
         self._capture_bgr = None
         self.active = True
         scene = self._set_scene(
-            comp.calibration_point(0, len(points), points[0], self._next_seq())
+            comp.calibration_point(
+                0, len(points), points[0], self._next_seq(), self._calib.status
+            )
         )
         return AskResponse(session_id=self.session_id, scene=scene, active=True)
+
+    def _crosshair(self, status: str | None = None) -> DisplayScene:
+        calib = self._calib
+        assert calib is not None
+        if status is not None:
+            calib.status = status
+        return self._set_scene(
+            self._rt.composer.calibration_point(
+                calib.idx, len(calib.points), calib.points[calib.idx],
+                self._next_seq(), calib.status,
+            )
+        )
+
+    def _calib_preview(self, jpeg: bytes) -> None:
+        """Update the live marker-feedback line from a preview frame; redraw
+        only when the feedback actually changes."""
+        calib = self._calib
+        assert calib is not None
+        frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+        if frame is None:
+            raise PipelineError("could not decode preview frame")
+        status, _ = _marker_status(detect_target(frame))
+        if status != calib.status:
+            self._crosshair(status)
 
     def _calib_capture(self, jpeg: bytes) -> DisplayScene:
         calib = self._calib
         assert calib is not None
-        comp = self._rt.composer
-        total = len(calib.points)
-
-        def crosshair(idx: int, hint: str | None = None) -> DisplayScene:
-            return self._set_scene(
-                comp.calibration_point(idx, total, calib.points[idx], self._next_seq(), hint)
-            )
 
         try:
             frame = _decode_bgr(jpeg)
         except PipelineError:
-            return crosshair(calib.idx, "bad frame - retry")
-        center = detect_target_center(frame)
-        if center is None:
-            return crosshair(calib.idx, f"{calib.idx + 1}/{total} no marker")
-        calib.pairs.append((center, calib.points[calib.idx]))
+            return self._crosshair("bad photo - again")
+        found = detect_target(frame)
+        status, ok = _marker_status(found)
+        self._rt.store.save_calibration_frame(
+            calib.idx, jpeg, annotate_detection(frame, found), ok
+        )
+        if not ok:
+            # The live line explains the problem; the click is simply not
+            # counted. Saved frames under runs/calibration/ show what the
+            # camera actually captured.
+            return self._crosshair(status)
+        calib.pairs.append((found[0], calib.points[calib.idx]))
         calib.idx += 1
-        if calib.idx < total:
-            return crosshair(calib.idx)
+        if calib.idx < len(calib.points):
+            return self._crosshair("marker OK - click")
 
         try:
             fitted = WindowCalibration.fit(calib.pairs)
+            if not (
+                0.05 < fitted.window_w < 2.0
+                and 0.05 < fitted.window_h < 2.0
+                and -0.5 < fitted.center_x < 1.5
+                and -0.5 < fitted.center_y < 1.5
+            ):
+                raise ConfigError(
+                    f"implausible fit: center=({fitted.center_x:.2f}, {fitted.center_y:.2f}) "
+                    f"window=({fitted.window_w:.2f}, {fitted.window_h:.2f})"
+                )
         except ConfigError as e:
             log.warning("calibration fit rejected: %s", e)
             calib.pairs.clear()
             calib.idx = 0
-            return crosshair(0, "bad data - redo")
+            return self._crosshair("odd data - redo 1/3")
 
         # Mutate the shared calibration in place: the composer and every
         # session hold references to this object.

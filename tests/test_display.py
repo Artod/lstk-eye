@@ -317,15 +317,17 @@ def test_error_prefix_and_wrap(composer):
     scene = composer.error("camera timeout", seq=6)
     lines = texts(scene)
     assert lines[0].text.startswith("! ")
+    # Every error names its exit on the status row.
+    assert lines[-1].text == "2click = reset"
     long = composer.error(
         "planner returned marks outside the segmented set, session aborted, retry the question",
         seq=7,
     )
-    lines = texts(long)
-    assert lines[0].text.startswith("! ")
-    assert 1 < len(lines) <= 4
-    assert all(len(e.text) <= composer.chars_per_line for e in lines)
-    assert lines[-1].text.endswith("..")
+    body = [e for e in texts(long) if e.text != "2click = reset"]
+    assert body[0].text.startswith("! ")
+    assert 1 < len(body) <= 3
+    assert all(len(e.text) <= composer.chars_per_line for e in body)
+    assert body[-1].text.endswith("..")
 
 
 def test_blank_empty(composer):

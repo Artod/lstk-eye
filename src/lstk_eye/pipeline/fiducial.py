@@ -30,8 +30,14 @@ def generate_target(path: str | Path, size: int = 900) -> Path:
     return path
 
 
-def detect_target_center(image_bgr: np.ndarray) -> tuple[float, float] | None:
-    """Normalized center of the marker in the frame, or None if not found."""
+def detect_target(
+    image_bgr: np.ndarray,
+) -> tuple[tuple[float, float], float, np.ndarray] | None:
+    """Find the marker: (normalized center, normalized size, corner pixels).
+
+    ``size`` is the longest quad side as a fraction of the frame width - the
+    calibration flow uses it to tell "marker too small / too far" apart from
+    "marker not in view". Returns None when the marker is not detected."""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) if image_bgr.ndim == 3 else image_bgr
     detector = cv2.aruco.ArucoDetector(
         cv2.aruco.getPredefinedDictionary(_DICT), cv2.aruco.DetectorParameters()
@@ -42,6 +48,33 @@ def detect_target_center(image_bgr: np.ndarray) -> tuple[float, float] | None:
     h, w = gray.shape[:2]
     for marker_corners, marker_id in zip(corners, ids.flatten(), strict=True):
         if marker_id == MARKER_ID:
-            center = marker_corners.reshape(-1, 2).mean(axis=0)
-            return (float(center[0]) / w, float(center[1]) / h)
+            quad = marker_corners.reshape(-1, 2)
+            center = quad.mean(axis=0)
+            side = float(max(np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)))
+            return ((float(center[0]) / w, float(center[1]) / h), side / w, quad)
     return None
+
+
+def detect_target_center(image_bgr: np.ndarray) -> tuple[float, float] | None:
+    """Normalized center of the marker in the frame, or None if not found."""
+    found = detect_target(image_bgr)
+    return found[0] if found is not None else None
+
+
+def annotate_detection(
+    image_bgr: np.ndarray, found: tuple[tuple[float, float], float, np.ndarray] | None
+) -> np.ndarray:
+    """Debug render: the detected quad and center cross, or a NOT FOUND
+    banner. Saved with every calibration click so misses are inspectable."""
+    out = image_bgr.copy()
+    if found is None:
+        cv2.putText(
+            out, "MARKER NOT FOUND", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3
+        )
+        return out
+    (cx, cy), _, quad = found
+    h, w = out.shape[:2]
+    cv2.polylines(out, [quad.astype(np.int32)], True, (0, 255, 0), 3)
+    px, py = int(cx * w), int(cy * h)
+    cv2.drawMarker(out, (px, py), (0, 0, 255), cv2.MARKER_CROSS, 30, 3)
+    return out
