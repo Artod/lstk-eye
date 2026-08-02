@@ -40,3 +40,16 @@ def match_intent(text: str) -> str | None:
             if f" {phrase} " in joined:
                 return intent
     return None
+
+
+def is_calibration_request(text: str) -> bool:
+    """A short utterance asking to (re)calibrate starts the calibration flow.
+
+    Substring match on the stem so "calibrate", "calibration", "калибровка"
+    and "откалибруй" all trigger; long sentences do not (the wearer would be
+    asking ABOUT calibration, not requesting it).
+    """
+    words = _normalize(text)
+    if not words or len(words) > _MAX_COMMAND_WORDS:
+        return False
+    return any(w.startswith(("calibrat", "калибр", "откалибр")) for w in words)

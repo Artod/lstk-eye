@@ -86,7 +86,7 @@ Button gestures beyond capture/ask. Request body:
 {"type": "next"}
 ```
 
-`type` is one of `"next"`, `"prev"`, `"cancel"`, `"repeat"`.
+`type` is one of `"next"`, `"prev"`, `"cancel"`, `"repeat"`, `"reset"`.
 
 ### POST /api/v1/preview and GET /api/v1/scene
 

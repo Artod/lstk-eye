@@ -121,9 +121,12 @@ class AskResponse(BaseModel):
 
 
 class EventRequest(BaseModel):
-    """Body of ``POST /api/v1/event`` - button gestures beyond capture/ask."""
+    """Body of ``POST /api/v1/event`` - button gestures beyond capture/ask.
 
-    type: Literal["next", "prev", "cancel", "repeat"]
+    ``reset`` (double click) ends the chat: session, history, and photo
+    buffer are cleared. The others arrive as voice commands."""
+
+    type: Literal["next", "prev", "cancel", "repeat", "reset"]
 
 
 class SceneResponse(BaseModel):

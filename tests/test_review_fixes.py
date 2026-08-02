@@ -54,11 +54,14 @@ def test_photo_during_session_does_not_clobber_slide(glasses):
 
     ack = glasses.capture(make_test_image())
     assert ack.count == 1
-    assert ack.scene is None, "mid-session capture must not replace the slide scene"
-
-    polled = glasses.poll_scene(slide_seq - 1)
-    assert polled.scene is not None
-    assert polled.scene.seq == slide_seq, "the slide is still the current scene"
+    # The current scene survives with a photo-count badge appended - the
+    # answer is never wiped by a full photo-counter screen.
+    assert ack.scene is not None
+    slide_texts = {e.text for e in start.scene.els if e.t == "text"}
+    ack_texts = {e.text for e in ack.scene.els if e.t == "text"}
+    assert "[1]" in ack_texts
+    assert slide_texts <= ack_texts, "the answer content must survive the capture"
+    assert ack.scene.seq > slide_seq
 
 
 def test_stt_empty_language_means_autodetect():

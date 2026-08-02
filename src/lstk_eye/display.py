@@ -124,7 +124,11 @@ class SceneComposer:
         ``style`` picks the marker: an instruction arrow, or the object
         highlight brackets used by find-this sessions.
         """
-        els: list[DisplayElement] = self._label_els(slide.label)
+        label_els = self._label_els(slide.label)
+        els: list[DisplayElement] = list(label_els)
+        # The arrow tip must clear the rows the label actually occupies, not a
+        # fixed two-line reservation - a one-line label frees a row.
+        label_bottom = self.y0 + len(label_els) * LINE_H
         if not anchored and slide.anchor is not None:
             els.append(TextEl(x=self.x0, y=self.status_y, text="look back"))
         if slide.total > 1:
@@ -136,19 +140,21 @@ class SceneComposer:
             raw = self._calibration.to_display(anchor)
             if self._visible(raw):
                 if style == "target":
-                    els.append(self._target_el(raw, slide.size))
+                    els.append(self._target_el(raw, slide.size, label_bottom))
                 else:
                     tip_x = min(max(raw[0], self.arrow_x[0]), self.arrow_x[1])
-                    tip_y = min(max(raw[1], self.arrow_y[0]), self.arrow_y[1])
+                    tip_y = min(max(raw[1], label_bottom + 3), self.arrow_y[1])
                     angle = _snap45(tip_x - self.center[0], tip_y - self.center[1])
                     els.append(ArrowEl(x=tip_x, y=tip_y, angle=angle, length=ARROW_LENGTH))
             else:
                 els.append(self._compass(anchor))
         return DisplayScene(seq=seq, els=els)
 
-    def _target_el(self, px: tuple[int, int], size: tuple[float, float] | None) -> TargetEl:
+    def _target_el(
+        self, px: tuple[int, int], size: tuple[float, float] | None, label_bottom: int
+    ) -> TargetEl:
         """Corner brackets sized to the object's apparent extent, kept inside
-        the visible area."""
+        the visible area and clear of the label rows."""
         x, y = px
         r = TARGET_R_MIN
         if size is not None:
@@ -160,9 +166,27 @@ class SceneComposer:
             r = max(abs(span[0] - zero[0]), abs(span[1] - zero[1]))
         r = min(max(r, TARGET_R_MIN), TARGET_R_MAX)
         # Shrink rather than shift: the brackets must frame the object, so the
-        # center stays put and r gives way at the border.
-        r = min(r, x - self.x0, self.x1 - x, y - self.y0, self.y1 - y)
+        # center stays put and r gives way at the border and under the label.
+        limits = [r, x - self.x0, self.x1 - x, y - self.y0, self.y1 - y]
+        if y > label_bottom:
+            limits.append(y - label_bottom - 1)
+        r = min(limits)
         return TargetEl(x=x, y=y, r=max(r, 3))
+
+    def calibration_point(
+        self, index: int, total: int, px: tuple[int, int], seq: int, hint: str | None = None
+    ) -> DisplayScene:
+        """One calibration crosshair: small brackets at ``px`` plus the step
+        instruction on the status row (kept away from the crosshair)."""
+        instruction = hint or f"aim {index + 1}/{total} + click"
+        text_y = self.status_y if px[1] < self.center[1] else self.y0
+        return DisplayScene(
+            seq=seq,
+            els=[
+                TargetEl(x=px[0], y=px[1], r=5),
+                TextEl(x=self.x0, y=text_y, text=instruction),
+            ],
+        )
 
     def photo_count(self, count: int, seq: int) -> DisplayScene:
         return DisplayScene(

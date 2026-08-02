@@ -127,6 +127,9 @@ class AppConfig(BaseSettings):
     )
 
     profile: Literal["real", "mock"] = "real"
+    # The TOML file this config was loaded from (or the default location to
+    # persist to); set by load_config, used by calibration to save results.
+    config_path: Path | None = None
     server: ServerConfig = Field(default_factory=ServerConfig)
     stt: SttConfig = Field(default_factory=SttConfig)
     segmenter: SegmenterConfig = Field(default_factory=SegmenterConfig)
@@ -182,4 +185,46 @@ def load_config(path: Path | None = None, **overrides) -> AppConfig:
         cfg = AppConfig(**{k: v for k, v in overrides.items() if v is not None})
     finally:
         _toml_path_override = None
+    if cfg.config_path is None:
+        used = path or next((p for p in DEFAULT_CONFIG_PATHS if p.is_file()), None)
+        cfg = cfg.model_copy(update={"config_path": used or DEFAULT_CONFIG_PATHS[0]})
     return cfg.resolved()
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    return '"' + str(v).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def save_calibration(cal: CalibrationConfig, path: Path) -> Path:
+    """Merge fitted calibration values into the TOML config at ``path``
+    (created if absent). Rewrites the file; comments are not preserved."""
+    import tomllib
+
+    data: dict = {}
+    if path.is_file():
+        data = tomllib.loads(path.read_text())
+    data["calibration"] = {
+        "center_x": round(cal.center_x, 5),
+        "center_y": round(cal.center_y, 5),
+        "window_w": round(cal.window_w, 5),
+        "window_h": round(cal.window_h, 5),
+    }
+    lines: list[str] = []
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            lines.append(f"{key} = {_toml_value(value)}")
+    for section, table in data.items():
+        if isinstance(table, dict):
+            lines.append("")
+            lines.append(f"[{section}]")
+            for key, value in table.items():
+                lines.append(f"{key} = {_toml_value(value)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path

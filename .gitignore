@@ -7,6 +7,7 @@ sandbox/
 
 # --- secrets & local config ---
 .env
+lstk-eye.toml
 *.local.toml
 firmware/*/device_config.h
 

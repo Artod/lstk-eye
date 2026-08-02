@@ -17,6 +17,11 @@
 
 // 1 = initialize the panel horizontally mirrored to compensate the single
 // beamsplitter reflection; 0 for bench tests without the optics.
+// Visible-area insets for locally drawn screens (splash, status, REC): the
+// optics crop the panel edges. Keep in sync with the server's display.pad_*.
+#define HUD_PAD_X 22
+#define HUD_PAD_Y 4
+
 #define HUD_MIRRORED 1
 
 // Button gesture timing (bench-validated).

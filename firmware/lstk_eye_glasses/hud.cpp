@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 
+#include "device_config.h"
 #include "pins.h"
 
 namespace {
@@ -148,11 +149,9 @@ bool hud_begin(bool mirrored) {
 
 void hud_splash(const char* version) {
   frame_start();
-  display.setTextSize(2);
-  display.setCursor(10, 16);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 14);
   display.print("lstk-eye");
-  display.setTextSize(1);
-  display.setCursor(10, 40);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 30);
   display.print("fw ");
   display.print(version);
   display.display();
@@ -160,44 +159,43 @@ void hud_splash(const char* version) {
 
 void hud_message(const char* line1, const char* line2) {
   frame_start();
-  display.setCursor(0, 8);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
   display.print(line1);
-  display.setCursor(0, 24);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 24);
   display.print(line2);
   display.display();
 }
 
 void hud_rec(uint32_t seconds, bool capped) {
   frame_start();
-  display.fillCircle(8, 12, 4, SSD1306_WHITE);
+  display.fillCircle(HUD_PAD_X + 4, HUD_PAD_Y + 10, 4, SSD1306_WHITE);
   display.setTextSize(2);
-  display.setCursor(18, 4);
+  display.setCursor(HUD_PAD_X + 14, HUD_PAD_Y + 2);
   display.print("REC");
-  display.setCursor(18, 28);
+  display.setCursor(HUD_PAD_X + 14, HUD_PAD_Y + 24);
   display.print(seconds);
   display.print("s");
   if (capped) {
     display.setTextSize(1);
-    display.setCursor(0, 52);
-    display.print("max length reached");
+    display.setCursor(HUD_PAD_X, 64 - HUD_PAD_Y - 8);
+    display.print("max length");
   }
   display.display();
 }
 
 void hud_thinking() {
   frame_start();
-  display.setTextSize(2);
-  display.setCursor(4, 24);
-  display.print("thinking..");
+  display.setCursor(HUD_PAD_X + 6, HUD_PAD_Y + 20);
+  display.print("thinking...");
   display.display();
 }
 
 void hud_error(const char* msg) {
   frame_start();
-  display.setCursor(0, 8);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
   display.print("! error");
   display.setTextWrap(true);
-  display.setCursor(0, 24);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 24);
   display.print(msg);
   display.display();
 }
@@ -205,12 +203,12 @@ void hud_error(const char* msg) {
 void hud_photo_count(int count) {
   frame_start();
   display.setTextSize(2);
-  display.setCursor(4, 20);
-  display.print("photo x");
+  display.setCursor(HUD_PAD_X + 2, HUD_PAD_Y + 14);
+  display.print("x");
   display.print(count);
   display.setTextSize(1);
-  display.setCursor(4, 44);
-  display.print("(offline count)");
+  display.setCursor(HUD_PAD_X + 2, HUD_PAD_Y + 34);
+  display.print("offline count");
   display.display();
 }
 

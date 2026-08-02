@@ -37,38 +37,49 @@ class AnthropicPlanner(Planner):
             self._client = anthropic.Anthropic(timeout=self._cfg.timeout_s)
         return self._client
 
-    def plan(self, marked_png: bytes, question: str, marks: list[SegMask]) -> Plan:
+    def plan(
+        self,
+        marked_png: bytes,
+        question: str,
+        marks: list[SegMask],
+        history: list[tuple[str, str]] | None = None,
+    ) -> Plan:
         import anthropic
 
         mark_ids = [m.mark_id for m in marks]
         image_b64 = base64.standard_b64encode(marked_png).decode("ascii")
+        # Earlier turns as plain text: their photos are gone, but the wearer's
+        # follow-ups build on what was already said.
+        messages: list[dict] = []
+        for past_q, past_a in (history or [])[-6:]:
+            messages.append({"role": "user", "content": past_q})
+            messages.append({"role": "assistant", "content": past_a})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": image_b64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": build_user_text(question, mark_ids, self._cfg.max_steps),
+                    },
+                ],
+            }
+        )
         try:
             response = self._get_client().messages.parse(
                 model=self._cfg.model,
                 max_tokens=self._cfg.max_tokens,
                 output_config={"effort": self._cfg.effort},
                 system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_b64,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": build_user_text(
-                                    question, mark_ids, self._cfg.max_steps
-                                ),
-                            },
-                        ],
-                    }
-                ],
+                messages=messages,
                 output_format=_PlanOut,
             )
         except anthropic.AuthenticationError as e:

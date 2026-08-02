@@ -16,7 +16,13 @@ _LOCATE_WORDS = ("find", "locate", "where", "show me", "найди", "найти
 
 
 class MockPlanner(Planner):
-    def plan(self, marked_png: bytes, question: str, marks: list[SegMask]) -> Plan:
+    def plan(
+        self,
+        marked_png: bytes,
+        question: str,
+        marks: list[SegMask],
+        history: list[tuple[str, str]] | None = None,
+    ) -> Plan:
         if not marks:
             return Plan(
                 steps=[PlanStep(label="No object detected", mark_id=None)],

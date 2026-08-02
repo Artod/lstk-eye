@@ -154,6 +154,20 @@ def demo(
 
 
 @app.command()
+def target(
+    out: Path = typer.Option(Path("calibration_target.png"), help="Output PNG path"),
+    size: int = typer.Option(900, help="Marker size in pixels (plus quiet zone)"),
+):
+    """Generate the calibration target - show it fullscreen on a phone or
+    monitor, then say "calibrate" to the glasses and follow the crosshairs."""
+    from lstk_eye.pipeline.fiducial import generate_target
+
+    path = generate_target(out, size=size)
+    console.print(f"[green]calibration target written to {path}[/]")
+    console.print("display it on a screen, then say 'calibrate' to the glasses")
+
+
+@app.command()
 def doctor(
     profile: str | None = ProfileOpt,
     config: Path | None = ConfigOpt,

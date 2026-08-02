@@ -177,6 +177,10 @@ class SimulatedGlasses:
     def repeat(self) -> SceneResponse:
         return self._event("repeat")
 
+    def reset(self) -> SceneResponse:
+        """Double click on the device: end the chat, clear everything."""
+        return self._event("reset")
+
     def preview(self, image: np.ndarray | str | Path, last_seq: int | None = None) -> SceneResponse:
         """One relocalization frame: QVGA JPEG in, latest scene (or null) out."""
         qvga = cv2.resize(_load_bgr(image), PREVIEW_SIZE, interpolation=cv2.INTER_AREA)

@@ -7,7 +7,7 @@
 // Gesture contract:
 //   single click  - capture XGA photo, POST /photos, show returned scene
 //   long press    - record mic while held; on release POST /ask with the WAV
-//   double click  - POST /event {"type":"next"}
+//   double click  - POST /event {"type":"reset"} - end the chat, clear all
 // While a session is active the loop POSTs a QVGA preview every
 // PREVIEW_INTERVAL_MS and applies whatever scene comes back; a response with
 // active=false ends the session and stops the previews.
@@ -69,13 +69,15 @@ static void handle_single_click() {
 }
 
 static void handle_double_click() {
-  NetResult r = net_post_json(api("/api/v1/event"), "{\"type\":\"next\"}");
+  // Double click resets the chat: server clears session, history, photos.
+  NetResult r = net_post_json(api("/api/v1/event"), "{\"type\":\"reset\"}");
   if (!r.ok) {
     hud_error("event failed");
     return;
   }
-  bool active = (state == ST_SESSION);
+  bool active = false;
   hud_apply_response(r.body, &active, nullptr);
+  local_photo_count = 0;
   state = active ? ST_SESSION : ST_IDLE;
 }
 

@@ -24,15 +24,22 @@ import cv2
 import numpy as np
 
 from lstk_eye.calibration import WindowCalibration
-from lstk_eye.config import AppConfig
-from lstk_eye.display import SceneComposer
-from lstk_eye.errors import LstkError, PipelineError
-from lstk_eye.intents import match_intent
+from lstk_eye.config import AppConfig, CalibrationConfig, save_calibration
+from lstk_eye.display import CHAR_W, SceneComposer
+from lstk_eye.errors import ConfigError, LstkError, PipelineError
+from lstk_eye.intents import is_calibration_request, match_intent
 from lstk_eye.pipeline import factories
+from lstk_eye.pipeline.fiducial import detect_target_center
 from lstk_eye.pipeline.interfaces import TargetTracker
 from lstk_eye.pipeline.marks import encode_png, overlay_marks
 from lstk_eye.pipeline.types import SegMask, Slide
-from lstk_eye.protocol.messages import AskResponse, DisplayScene, PhotoAck, SceneResponse
+from lstk_eye.protocol.messages import (
+    AskResponse,
+    DisplayScene,
+    PhotoAck,
+    SceneResponse,
+    TextEl,
+)
 from lstk_eye.storage import RunStore
 
 log = logging.getLogger(__name__)
@@ -41,6 +48,18 @@ PHOTO_TTL_S = 120.0
 MAX_PHOTOS = 5
 # Minimum normalized anchor movement that triggers a scene update.
 ANCHOR_EPS = 0.012
+# Chat history kept per device (question/answer pairs); the planner sees the
+# most recent slice of it.
+MAX_HISTORY = 12
+
+
+class _CalibState:
+    """In-flight calibration: crosshair points to show, pairs collected."""
+
+    def __init__(self, points: list[tuple[int, int]]):
+        self.points = points
+        self.pairs: list[tuple[tuple[float, float], tuple[int, int]]] = []
+        self.idx = 0
 
 
 class Runtime:
@@ -86,6 +105,9 @@ class DeviceSession:
         # "target" for find-this sessions (a single anchored step renders as
         # highlight brackets); "arrow" for multi-step instructions.
         self._style = "arrow"  # type: str
+        # Ongoing chat: (question, answer) pairs, cleared by reset.
+        self._history: list[tuple[str, str]] = []
+        self._calib: _CalibState | None = None
 
     # --- scene bookkeeping ---
 
@@ -104,18 +126,43 @@ class DeviceSession:
 
     def add_photo(self, jpeg: bytes) -> PhotoAck:
         with self._lock:
+            if self._calib is not None:
+                return PhotoAck(count=len(self._photos), scene=self._calib_capture(jpeg))
             now = time.monotonic()
             self._photos = [(b, t) for b, t in self._photos if now - t < PHOTO_TTL_S]
             self._photos.append((jpeg, now))
             self._photos = self._photos[-MAX_PHOTOS:]
             count = len(self._photos)
             if self.active:
-                # Scenes replace each other, and nothing would restore the
-                # slide afterwards - so mid-session captures are acknowledged
-                # in the count only, without touching the display.
-                return PhotoAck(count=count, scene=None)
+                # Scenes replace each other, so a full photo-counter screen
+                # would wipe the answer. Acknowledge with a badge on the
+                # current scene instead.
+                return PhotoAck(count=count, scene=self._badge_scene(count))
             scene = self._set_scene(self._rt.composer.photo_count(count, self._next_seq()))
             return PhotoAck(count=count, scene=scene)
+
+    def _badge_scene(self, count: int) -> DisplayScene:
+        """Re-issue the current scene with a photo-count badge on the status
+        row, replacing any previous badge."""
+        comp = self._rt.composer
+        badge = f"[{count}]"
+        els = [
+            e
+            for e in self._scene.els
+            if not (
+                isinstance(e, TextEl)
+                and e.y == comp.status_y
+                and e.text.startswith("[")
+                and e.text.endswith("]")
+            )
+        ]
+        x = comp.x1 + 1 - len(badge) * CHAR_W
+        # Step counters ("2/5") also live on the right of the status row.
+        for e in els:
+            if isinstance(e, TextEl) and e.y == comp.status_y and "/" in e.text:
+                x = e.x - len(badge) * CHAR_W - CHAR_W
+        els.append(TextEl(x=max(comp.x0, x), y=comp.status_y, text=badge))
+        return self._set_scene(DisplayScene(seq=self._next_seq(), els=els))
 
     def ask(self, wav: bytes, text: str | None = None) -> AskResponse:
         with self._lock:
@@ -140,6 +187,15 @@ class DeviceSession:
                 self._rt.composer.status("didn't catch that", self._next_seq(), "try again")
             )
             return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
+
+        # "calibrate" starts the camera->display calibration flow from any
+        # state; a voice command during calibration cancels it.
+        if is_calibration_request(question):
+            return self._start_calibration()
+        if self._calib is not None and match_intent(question) in ("cancel", "reset"):
+            self._calib = None
+            scene = self._set_scene(self._rt.composer.status("calibration off", self._next_seq()))
+            return AskResponse(session_id=self.session_id, scene=scene, active=False)
 
         # Voice commands during an active session ("back", "repeat", "cancel")
         # never start a new pipeline run.
@@ -168,7 +224,7 @@ class DeviceSession:
         masks = self._rt.segmenter.segment(capture)
         marked = overlay_marks(capture, masks)
         marked_png = encode_png(marked)
-        plan = self._rt.planner.plan(marked_png, question, masks)
+        plan = self._rt.planner.plan(marked_png, question, masks, history=self._history)
 
         mask_by_id = {m.mark_id: m for m in masks}
         slides = [
@@ -185,12 +241,15 @@ class DeviceSession:
             for i, step in enumerate(plan.steps)
         ]
 
-        self.session_id = uuid.uuid4().hex[:8]
+        self.session_id = self.session_id or uuid.uuid4().hex[:8]
         self.active = True
         self._slides = slides
         self._style = (
             "target" if len(slides) == 1 and slides[0].anchor is not None else "arrow"
         )
+        answer = plan.summary or "; ".join(s.label for s in plan.steps)
+        self._history.append((question, answer))
+        self._history = self._history[-MAX_HISTORY:]
         self._mask_by_id = mask_by_id
         self._capture_bgr = capture
         self._photos = []
@@ -205,6 +264,17 @@ class DeviceSession:
             return self._event_locked(event_type)
 
     def _event_locked(self, event_type: str) -> SceneResponse:
+        if event_type == "reset":
+            # Double click: the chat is over - session, history, photo
+            # buffer, and any in-flight calibration all go.
+            self._calib = None
+            self._history = []
+            self._photos = []
+            return SceneResponse(scene=self._finish("done"), active=False)
+        if self._calib is not None:
+            # Calibration owns the screen; only reset (above) and clicks
+            # (add_photo) mean anything.
+            return SceneResponse(scene=None, active=True)
         if not self.active:
             return SceneResponse(scene=None, active=False)
         if event_type == "next":
@@ -301,6 +371,91 @@ class DeviceSession:
                     slide, self._next_seq(), self._anchored, self._anchor, style=self._style
                 )
             )
+
+    # --- calibration flow ---
+    #
+    # Triggered by voice ("calibrate"). The HUD shows a small crosshair; the
+    # wearer moves their head until the physical ArUco target (shown on a
+    # phone/monitor, see `lstk-eye target`) sits under the crosshair, then
+    # clicks. Each click yields one (camera point, display point) pair; three
+    # points with horizontal and vertical spread solve the window model.
+
+    def _start_calibration(self) -> AskResponse:
+        comp = self._rt.composer
+        cx, cy = comp.center
+        points = [(cx, cy), (comp.x1 - 6, cy), (cx, comp.y0 + 6)]
+        self._calib = _CalibState(points)
+        self._slides = []
+        self._mask_by_id = {}
+        self._tracker = None
+        self._capture_bgr = None
+        self.active = True
+        scene = self._set_scene(
+            comp.calibration_point(0, len(points), points[0], self._next_seq())
+        )
+        return AskResponse(session_id=self.session_id, scene=scene, active=True)
+
+    def _calib_capture(self, jpeg: bytes) -> DisplayScene:
+        calib = self._calib
+        assert calib is not None
+        comp = self._rt.composer
+        total = len(calib.points)
+
+        def crosshair(idx: int, hint: str | None = None) -> DisplayScene:
+            return self._set_scene(
+                comp.calibration_point(idx, total, calib.points[idx], self._next_seq(), hint)
+            )
+
+        try:
+            frame = _decode_bgr(jpeg)
+        except PipelineError:
+            return crosshair(calib.idx, "bad frame - retry")
+        center = detect_target_center(frame)
+        if center is None:
+            return crosshair(calib.idx, f"{calib.idx + 1}/{total} no marker")
+        calib.pairs.append((center, calib.points[calib.idx]))
+        calib.idx += 1
+        if calib.idx < total:
+            return crosshair(calib.idx)
+
+        try:
+            fitted = WindowCalibration.fit(calib.pairs)
+        except ConfigError as e:
+            log.warning("calibration fit rejected: %s", e)
+            calib.pairs.clear()
+            calib.idx = 0
+            return crosshair(0, "bad data - redo")
+
+        # Mutate the shared calibration in place: the composer and every
+        # session hold references to this object.
+        cal = self._rt.calibration
+        cal.center_x, cal.center_y = fitted.center_x, fitted.center_y
+        cal.window_w, cal.window_h = fitted.window_w, fitted.window_h
+        self._calib = None
+        self.active = False
+        log.info(
+            "calibrated: center=(%.3f, %.3f) window=(%.3f, %.3f)",
+            cal.center_x, cal.center_y, cal.window_w, cal.window_h,
+        )
+        note = "saved"
+        cfg_path = self._rt.cfg.config_path
+        if cfg_path is None:
+            note = "not saved"
+        else:
+            try:
+                save_calibration(
+                    CalibrationConfig(
+                        center_x=cal.center_x,
+                        center_y=cal.center_y,
+                        window_w=cal.window_w,
+                        window_h=cal.window_h,
+                    ),
+                    cfg_path,
+                )
+            except OSError:
+                log.warning("could not persist calibration", exc_info=True)
+                note = "save failed"
+        return self._set_scene(self._rt.composer.status("calibrated", self._next_seq(), note))
 
     def _finish(self, message: str) -> DisplayScene:
         self.active = False

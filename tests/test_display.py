@@ -161,8 +161,8 @@ def test_single_slide_hides_counter(composer):
     ("anchor", "tip", "angle"),
     [
         ((0.6, 0.6), (96, 48), 45),  # down-right: d=(33,17) -> 27.3 -> 45
-        ((0.42, 0.42), (38, 20), 225),  # up-left: d=(-25,-11) -> -156.3 -> 225
-        ((0.55, 0.42), (80, 20), 315),  # up-right: d=(17,-11) -> -32.9 -> 315
+        ((0.42, 0.42), (38, 19), 225),  # up-left (1-line label frees the row)
+        ((0.55, 0.42), (80, 19), 315),  # up-right: d=(17,-12) -> -35.2 -> 315
         ((0.45, 0.58), (48, 45), 135),  # down-left: d=(-15,14) -> 137 -> 135
         ((0.6, 0.5), (96, 32), 0),  # due right: d=(33,1) -> 1.7 -> 0
         ((0.5, 0.6), (64, 48), 90),  # due down: d=(1,17) -> 86.6 -> 90
@@ -182,8 +182,9 @@ def test_slide_arrow_quadrants(composer, anchor, tip, angle):
     [
         # Raw (110, 58): visible, outside the arrow band -> clamped (109, 51).
         ((0.64375, 0.6625), (109, 51), 45),
-        # Raw (17, 10): visible, clamped to (18, 20): d=(-45,-11) -> 180.
-        ((0.353125, 0.3625), (18, 20), 180),
+        # Raw (17, 10): visible, clamped to (18, 14) - the one-line label
+        # occupies rows up to y=11, and the arrow clears it by 3 px.
+        ((0.353125, 0.3625), (18, 14), 180),
     ],
 )
 def test_slide_arrow_clamped_at_borders(composer, anchor, tip, angle):
@@ -249,9 +250,10 @@ def test_target_style_renders_brackets(composer):
     scene = composer.slide(slide, seq=1, anchored=True, anchor=(0.5, 0.5), style="target")
     assert not arrows(scene)
     (target,) = targets(scene)
-    # Raw center (64, 32); r from the bbox half-extent (32 px) capped at 22.
+    # Raw center (64, 32); r from the bbox half-extent (32 px) capped at 22,
+    # then shrunk to clear the one-line label (rows up to y=11): 32-11-1 = 20.
     assert (target.x, target.y) == (64, 32)
-    assert target.r == 22
+    assert target.r == 20
 
 
 def test_target_shrinks_near_border(composer):

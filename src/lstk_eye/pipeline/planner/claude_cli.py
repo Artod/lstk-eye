@@ -42,7 +42,19 @@ class ClaudeCliPlanner(Planner):
     def __init__(self, cfg: PlannerConfig):
         self._cfg = cfg
 
-    def plan(self, marked_png: bytes, question: str, marks: list[SegMask]) -> Plan:
+    def plan(
+        self,
+        marked_png: bytes,
+        question: str,
+        marks: list[SegMask],
+        history: list[tuple[str, str]] | None = None,
+    ) -> Plan:
+        # History is included as plain dialogue lines ahead of the question.
+        if history:
+            dialogue = "\n".join(
+                f"Wearer: {q}\nYou answered: {a}" for q, a in history[-6:]
+            )
+            question = f"Earlier in this conversation:\n{dialogue}\n\nNow: {question}"
         mark_ids = [m.mark_id for m in marks]
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             f.write(marked_png)

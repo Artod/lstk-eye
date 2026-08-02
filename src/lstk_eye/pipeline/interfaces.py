@@ -35,10 +35,21 @@ class Planner(ABC):
     ``marked_png`` is the Set-of-Marks overlay as encoded PNG. Implementations
     must return steps whose mark_id values are drawn from ``marks`` (or None),
     and must raise PlanningError rather than return out-of-range marks.
+
+    ``history`` is the ongoing chat: (question, answer) pairs from earlier
+    turns of the same session, oldest first. The current photo supersedes the
+    ones from earlier turns; history exists so follow-ups ("what about now?",
+    "the other one") resolve against what was already said.
     """
 
     @abstractmethod
-    def plan(self, marked_png: bytes, question: str, marks: list[SegMask]) -> Plan: ...
+    def plan(
+        self,
+        marked_png: bytes,
+        question: str,
+        marks: list[SegMask],
+        history: list[tuple[str, str]] | None = None,
+    ) -> Plan: ...
 
 
 class TargetTracker(ABC):
