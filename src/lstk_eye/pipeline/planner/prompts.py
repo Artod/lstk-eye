@@ -42,9 +42,11 @@ Rules for steps:
   phone", "where is the screwdriver"), return exactly one step: label = the
   object's name, mark_id = the mark that best covers that object. The display
   renders single-step answers as a highlight frame around the object.
-- If the question is not about anything visible, or the photo does not show
-  what is being asked about, return a single step with a short honest label
-  (e.g. "Object not in view") and mark_id null.
+- If the asked object is NOT clearly present in the photo, say so: one step,
+  short honest label (e.g. "Tulip not in view"), mark_id null. NEVER pick the
+  closest look-alike (a yellow jacket is not a tulip) - a wrong anchor is
+  worse than no anchor. The wearer looking away or moving too close/far is a
+  normal, expected case, not a failure to work around.
 """
 
 

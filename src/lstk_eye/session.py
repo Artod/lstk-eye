@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 PHOTO_TTL_S = 120.0
 MAX_PHOTOS = 5
 # Minimum normalized anchor movement that triggers a scene update.
-ANCHOR_EPS = 0.012
+ANCHOR_EPS = 0.008
 # Chat history kept per device (question/answer pairs); the planner sees the
 # most recent slice of it.
 MAX_HISTORY = 12

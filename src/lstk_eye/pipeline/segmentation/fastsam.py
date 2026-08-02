@@ -16,7 +16,7 @@ from lstk_eye.pipeline.types import SegMask
 
 # A mask covering nearly the whole frame is the tabletop/background, useless
 # as an anchor target.
-_MAX_MASK_FRACTION = 0.90
+_MAX_MASK_FRACTION = 0.960
 
 
 class FastSAMSegmenter(Segmenter):

@@ -103,11 +103,37 @@ class SceneComposer:
             for i, line in enumerate(wrap_text(label, self.chars_per_line))
         ]
 
-    def _compass(self, anchor: tuple[float, float]) -> ChevronEl:
+    def _compass(self, anchor: tuple[float, float], label: str = "") -> ChevronEl:
         """Chevron just inside the visible border, pointing toward an
-        off-window target: turn your head this way."""
-        tip = self._clamp(self._calibration.to_display(anchor), margin=3)
-        return ChevronEl(edge=self._calibration.edge_for(anchor), x=tip[0], y=tip[1])
+        off-window target: turn your head this way.
+
+        The edge is chosen by overshoot beyond the VISIBLE rectangle - the
+        pads matter: a target in the cropped margin (inside the panel but
+        outside the visible area) must still point to the correct side."""
+        x, y = self._calibration.to_display(anchor)
+        w = self.x1 - self.x0
+        h = self.y1 - self.y0
+        overshoot = {
+            "left": (self.x0 - x) / w,
+            "right": (x - self.x1) / w,
+            "up": (self.y0 - y) / h,
+            "down": (y - self.y1) / h,
+        }
+        edge = max(overshoot, key=overshoot.get)
+        tip = self._clamp((x, y), margin=3)
+        return ChevronEl(edge=edge, label=label, x=tip[0], y=tip[1])
+
+    def _floating_label(self, text: str, x: int, y: int, r: int) -> TextEl:
+        """Game-style label attached to a target marker: preferably right
+        above the brackets, else below, always whole and inside the visible
+        area, centered on the marker."""
+        text = text[: self.chars_per_line]
+        w = len(text) * CHAR_W
+        lx = min(max(x - w // 2, self.x0), self.x1 + 1 - w)
+        above = y - r - GLYPH_H - 2
+        below = y + r + 3
+        ly = above if above >= self.y0 else min(below, self.y1 - GLYPH_H + 1)
+        return TextEl(x=lx, y=ly, text=text)
 
     # --- scenes ---
 
@@ -127,6 +153,9 @@ class SceneComposer:
         ``style`` picks the marker: an instruction arrow, or the object
         highlight brackets used by find-this sessions.
         """
+        if style == "target":
+            return self._target_scene(slide, seq, anchored, anchor)
+
         label_els = self._label_els(slide.label)
         els: list[DisplayElement] = list(label_els)
         # The arrow tip must clear the rows the label actually occupies, not a
@@ -142,22 +171,43 @@ class SceneComposer:
         if anchor is not None and anchored:
             raw = self._calibration.to_display(anchor)
             if self._visible(raw):
-                if style == "target":
-                    els.append(self._target_el(raw, slide.size, label_bottom))
-                else:
-                    tip_x = min(max(raw[0], self.arrow_x[0]), self.arrow_x[1])
-                    tip_y = min(max(raw[1], label_bottom + 3), self.arrow_y[1])
-                    angle = _snap45(tip_x - self.center[0], tip_y - self.center[1])
-                    els.append(ArrowEl(x=tip_x, y=tip_y, angle=angle, length=ARROW_LENGTH))
+                tip_x = min(max(raw[0], self.arrow_x[0]), self.arrow_x[1])
+                tip_y = min(max(raw[1], label_bottom + 3), self.arrow_y[1])
+                angle = _snap45(tip_x - self.center[0], tip_y - self.center[1])
+                els.append(ArrowEl(x=tip_x, y=tip_y, angle=angle, length=ARROW_LENGTH))
             else:
                 els.append(self._compass(anchor))
         return DisplayScene(seq=seq, els=els)
 
-    def _target_el(
-        self, px: tuple[int, int], size: tuple[float, float] | None, label_bottom: int
-    ) -> TargetEl:
+    def _target_scene(
+        self, slide: Slide, seq: int, anchored: bool, anchor: tuple[float, float] | None
+    ) -> DisplayScene:
+        """Find-mode frame. The label is attached to the marker and floats
+        with it (no static text block for markers to collide with):
+
+        - target visible: brackets + label right next to them,
+        - target off-window: compass chevron with the label beside it,
+        - target lost: nothing fake - centered object name + "look back".
+        """
+        els: list[DisplayElement] = []
+        if anchor is not None and anchored:
+            raw = self._calibration.to_display(anchor)
+            if self._visible(raw):
+                target = self._target_el(raw, slide.size)
+                els.append(target)
+                els.append(
+                    self._floating_label(slide.label, target.x, target.y, target.r)
+                )
+            else:
+                els.append(self._compass(anchor, label=slide.label[:8]))
+        else:
+            els.append(self._centered(slide.label, y=22))
+            els.append(self._centered("look back", y=34))
+        return DisplayScene(seq=seq, els=els)
+
+    def _target_el(self, px: tuple[int, int], size: tuple[float, float] | None) -> TargetEl:
         """Corner brackets sized to the object's apparent extent, kept inside
-        the visible area and clear of the label rows."""
+        the visible area."""
         x, y = px
         r = TARGET_R_MIN
         if size is not None:
@@ -169,11 +219,8 @@ class SceneComposer:
             r = max(abs(span[0] - zero[0]), abs(span[1] - zero[1]))
         r = min(max(r, TARGET_R_MIN), TARGET_R_MAX)
         # Shrink rather than shift: the brackets must frame the object, so the
-        # center stays put and r gives way at the border and under the label.
-        limits = [r, x - self.x0, self.x1 - x, y - self.y0, self.y1 - y]
-        if y > label_bottom:
-            limits.append(y - label_bottom - 1)
-        r = min(limits)
+        # center stays put and r gives way at the border.
+        r = min(r, x - self.x0, self.x1 - x, y - self.y0, self.y1 - y)
         return TargetEl(x=x, y=y, r=max(r, 3))
 
     def calibration_point(

@@ -110,10 +110,13 @@ class CalibrationConfig(BaseModel):
 
 
 class RelocConfig(BaseModel):
-    appear_conf: float = 0.60
-    disappear_conf: float = 0.45
+    # Raised after field testing: at 0.60 the matcher latched onto
+    # similar-colored blobs (a yellow jacket "found" as a tulip). A wrong
+    # marker is worse than an honest "look back".
+    appear_conf: float = 0.70
+    disappear_conf: float = 0.55
     miss_hide: int = 4  # consecutive misses before arrows hide
-    ema: float = 0.4  # smoothing factor for anchor position, 1.0 = no smoothing
+    ema: float = 0.5  # smoothing factor for anchor position, 1.0 = no smoothing
     scales: list[float] = Field(default_factory=lambda: [0.85, 1.0, 1.18])
 
 

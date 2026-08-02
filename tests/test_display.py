@@ -250,10 +250,16 @@ def test_target_style_renders_brackets(composer):
     scene = composer.slide(slide, seq=1, anchored=True, anchor=(0.5, 0.5), style="target")
     assert not arrows(scene)
     (target,) = targets(scene)
-    # Raw center (64, 32); r from the bbox half-extent (32 px) capped at 22,
-    # then shrunk to clear the one-line label (rows up to y=11): 32-11-1 = 20.
+    # Raw center (64, 32); r from the bbox half-extent (32 px) capped at 22.
     assert (target.x, target.y) == (64, 32)
-    assert target.r == 20
+    assert target.r == 22
+    # The label floats with the marker instead of sitting in a fixed corner.
+    (label,) = texts(scene)
+    assert label.text == "phone"
+    assert abs((label.x + len(label.text) * 6 // 2) - target.x) <= 4
+    # r=22 at panel center leaves no room above (0 < y0), so the label goes
+    # below, clamped to the last visible text row.
+    assert label.y == min(target.y + target.r + 3, composer.y1 - 8 + 1)
 
 
 def test_target_shrinks_near_border(composer):

@@ -8,9 +8,13 @@
 //   single click  - capture XGA photo, POST /photos, show returned scene
 //   long press    - record mic while held; on release POST /ask with the WAV
 //   double click  - POST /event {"type":"reset"} - end the chat, clear all
-// While a session is active the loop POSTs a QVGA preview every
-// PREVIEW_INTERVAL_MS and applies whatever scene comes back; a response with
-// active=false ends the session and stops the previews.
+//
+// Concurrency: all networking and camera captures run on a dedicated worker
+// task (core 0) fed by a job queue, so the UI loop polls the button every
+// millisecond no matter what is in flight - a click can never be swallowed
+// by a blocking HTTP request. Results come back through a queue and are
+// applied (all HUD drawing) on the UI loop only. While a session is active
+// the worker self-schedules a QVGA preview every PREVIEW_INTERVAL_MS.
 
 #include <Arduino.h>
 
@@ -22,17 +26,36 @@
 #include "net.h"
 #include "pins.h"
 
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 
-// Top-level device state machine. WAITING is transient: handle_ask() blocks
-// through the HTTP round trip and leaves it before returning to loop().
+// UI-side device state. WAITING = an ask is in flight on the worker.
 enum DeviceState : uint8_t { ST_IDLE, ST_RECORDING, ST_WAITING, ST_SESSION };
+
+enum JobType : uint8_t { JOB_PHOTO, JOB_RESET, JOB_ASK };
+
+struct NetJob {
+  JobType type;
+  uint8_t* wav;  // JOB_ASK payload, freed by the worker after the POST
+  size_t len;
+};
+
+struct NetResultMsg {
+  JobType type;
+  bool ok;
+  char body[3072];
+};
 
 static DeviceState state = ST_IDLE;
 static bool hardware_ok = false;
 static int local_photo_count = 0;
-static uint32_t last_preview_ms = 0;
 static uint32_t last_rec_draw_ms = 0;
+
+static QueueHandle_t q_jobs;
+static QueueHandle_t q_results;
+// Written by the UI loop, read by the worker to self-schedule previews; the
+// worker also clears it when a preview response says the session ended.
+static volatile bool g_session_active = false;
+static volatile bool g_online = false;
 
 static String api(const char* path) {
   return String(path) + "?device_id=" + DEVICE_ID;
@@ -46,78 +69,144 @@ static void wifi_status(const char* msg) {
   hud_message("WiFi", msg);
 }
 
-static void handle_single_click() {
-  camera_fb_t* fb = cam_capture_photo();
-  if (fb == nullptr) {
-    hud_error("capture failed");
-    return;
-  }
-  NetResult r = net_post_jpeg(api("/api/v1/photos"), fb->buf, fb->len);
-  cam_release(fb);
-  if (r.ok) {
-    int count = -1;
-    hud_apply_response(r.body, nullptr, &count);
-    if (count >= 0) {
-      local_photo_count = count;
+// --- worker task (core 0): all camera captures and HTTP ---
+
+static void push_result(JobType type, bool ok, const String& body) {
+  NetResultMsg msg;
+  msg.type = type;
+  msg.ok = ok;
+  strlcpy(msg.body, body.c_str(), sizeof(msg.body));
+  xQueueSend(q_results, &msg, 0);  // drop when the UI is behind
+}
+
+static void run_job(const NetJob& job) {
+  switch (job.type) {
+    case JOB_PHOTO: {
+      camera_fb_t* fb = cam_capture_photo();
+      if (fb == nullptr) {
+        push_result(JOB_PHOTO, false, "");
+        return;
+      }
+      NetResult r = net_post_jpeg(api("/api/v1/photos"), fb->buf, fb->len);
+      cam_release(fb);
+      push_result(JOB_PHOTO, r.ok, r.body);
+      return;
     }
-  } else {
-    // Server unreachable: keep counting locally so the HUD still gives
-    // feedback; the buffer on the server is out of sync until the next ask.
-    local_photo_count++;
-    hud_photo_count(local_photo_count);
+    case JOB_RESET: {
+      NetResult r = net_post_json(api("/api/v1/event"), "{\"type\":\"reset\"}");
+      push_result(JOB_RESET, r.ok, r.body);
+      return;
+    }
+    case JOB_ASK: {
+      NetResult r = net_post_wav(api("/api/v1/ask"), job.wav, job.len);
+      free(job.wav);
+      push_result(JOB_ASK, r.ok, r.body);
+      return;
+    }
   }
 }
 
-static void handle_double_click() {
-  // Double click resets the chat: server clears session, history, photos.
-  NetResult r = net_post_json(api("/api/v1/event"), "{\"type\":\"reset\"}");
-  if (!r.ok) {
-    hud_error("event failed");
-    return;
+static void worker_task(void*) {
+  uint32_t last_preview_ms = 0;
+  for (;;) {
+    g_online = net_ensure();
+    NetJob job;
+    if (xQueueReceive(q_jobs, &job, pdMS_TO_TICKS(20)) == pdTRUE) {
+      if (g_online) {
+        run_job(job);
+      } else {
+        if (job.type == JOB_ASK) {
+          free(job.wav);
+        }
+        push_result(job.type, false, "");
+      }
+      continue;
+    }
+    if (g_online && g_session_active &&
+        millis() - last_preview_ms >= PREVIEW_INTERVAL_MS &&
+        uxQueueMessagesWaiting(q_jobs) == 0) {
+      last_preview_ms = millis();
+      camera_fb_t* fb = cam_capture_preview();
+      if (fb == nullptr) {
+        continue;
+      }
+      NetResult r = net_post_jpeg(api_with_seq("/api/v1/preview"), fb->buf, fb->len);
+      cam_release(fb);
+      if (r.ok && r.body.length() > 0) {
+        NetResultMsg msg;
+        msg.type = (JobType)0xFF;  // preview marker, see apply_result
+        msg.ok = true;
+        strlcpy(msg.body, r.body.c_str(), sizeof(msg.body));
+        xQueueSend(q_results, &msg, 0);
+      }
+    }
   }
-  bool active = false;
-  hud_apply_response(r.body, &active, nullptr);
-  local_photo_count = 0;
-  state = active ? ST_SESSION : ST_IDLE;
 }
 
-static void handle_ask() {
-  uint8_t* wav = nullptr;
-  const size_t len = mic_record_stop(&wav);
-  if (len == 0 || wav == nullptr) {
-    hud_error("no audio captured");
+// --- UI side: state transitions and drawing ---
+
+static void enqueue(JobType type, uint8_t* wav = nullptr, size_t len = 0) {
+  NetJob job{type, wav, len};
+  if (xQueueSend(q_jobs, &job, 0) != pdTRUE && type == JOB_ASK) {
+    free(wav);  // queue jammed; never leak the recording
+    hud_error("busy, retry");
     state = ST_IDLE;
-    return;
   }
-  state = ST_WAITING;
-  hud_thinking();
-  NetResult r = net_post_wav(api("/api/v1/ask"), wav, len);
-  if (!r.ok) {
-    hud_error("ask failed");
-    state = ST_IDLE;
-    return;
-  }
-  bool active = true;
-  hud_apply_response(r.body, &active, nullptr);
-  local_photo_count = 0;  // the server consumed the buffered photos
-  state = active ? ST_SESSION : ST_IDLE;
-  last_preview_ms = millis();
 }
 
-static void send_preview() {
-  camera_fb_t* fb = cam_capture_preview();
-  if (fb == nullptr) {
+static void apply_result(const NetResultMsg& msg) {
+  const String body(msg.body);
+  if (msg.type == (JobType)0xFF) {  // preview
+    bool active = true;
+    hud_apply_response(body, &active, nullptr);
+    if (!active) {
+      g_session_active = false;
+      if (state == ST_SESSION) {
+        state = ST_IDLE;
+      }
+    }
     return;
   }
-  NetResult r = net_post_jpeg(api_with_seq("/api/v1/preview"), fb->buf, fb->len);
-  cam_release(fb);
-  if (!r.ok) {
-    return;  // transient failure; next preview retries
-  }
-  bool active = true;
-  hud_apply_response(r.body, &active, nullptr);
-  if (!active) {
-    state = ST_IDLE;
+  switch (msg.type) {
+    case JOB_PHOTO:
+      if (msg.ok) {
+        int count = -1;
+        hud_apply_response(body, nullptr, &count);
+        if (count >= 0) {
+          local_photo_count = count;
+        }
+      } else {
+        // Server unreachable: count locally so the HUD still gives feedback.
+        local_photo_count++;
+        hud_photo_count(local_photo_count);
+      }
+      break;
+    case JOB_RESET: {
+      if (!msg.ok) {
+        hud_error("reset failed");
+        break;
+      }
+      bool active = false;
+      hud_apply_response(body, &active, nullptr);
+      local_photo_count = 0;
+      g_session_active = active;
+      state = active ? ST_SESSION : ST_IDLE;
+      break;
+    }
+    case JOB_ASK: {
+      if (!msg.ok) {
+        hud_error("ask failed");
+        state = ST_IDLE;
+        g_session_active = false;
+        break;
+      }
+      bool active = true;
+      hud_apply_response(body, &active, nullptr);
+      local_photo_count = 0;
+      g_session_active = active;
+      state = active ? ST_SESSION : ST_IDLE;
+      break;
+    }
   }
 }
 
@@ -137,12 +226,18 @@ void setup() {
     return;
   }
   hardware_ok = true;
-  if (!net_connect(wifi_status)) {
-    return;  // loop() keeps retrying
+
+  q_jobs = xQueueCreate(4, sizeof(NetJob));
+  q_results = xQueueCreate(4, sizeof(NetResultMsg));
+
+  // Initial blocking connect keeps boot feedback simple; afterwards the
+  // worker owns WiFi and all requests.
+  if (net_connect(wifi_status)) {
+    NetResult health = net_get("/api/v1/health");
+    hud_message("lstk-eye " FW_VERSION,
+                health.ok ? "server ok" : "server unreachable");
   }
-  NetResult health = net_get("/api/v1/health");
-  hud_message("lstk-eye " FW_VERSION,
-              health.ok ? "server ok" : "server unreachable");
+  xTaskCreatePinnedToCore(worker_task, "net", 8192, nullptr, 1, nullptr, 0);
 }
 
 void loop() {
@@ -150,11 +245,8 @@ void loop() {
     delay(1000);
     return;
   }
-  // Non-blocking connection keeper: the button FSM must keep running while
-  // WiFi is down (offline photo counting still works), so reconnect attempts
-  // never block the loop. The HUD note is drawn only on the transition.
   static bool was_online = true;
-  const bool online = net_ensure();
+  const bool online = g_online;
   if (online != was_online) {
     was_online = online;
     if (!online && state != ST_RECORDING) {
@@ -169,9 +261,9 @@ void loop() {
     case ST_IDLE:
     case ST_SESSION:
       if (ev == BTN_SINGLE) {
-        handle_single_click();
+        enqueue(JOB_PHOTO);
       } else if (ev == BTN_DOUBLE) {
-        handle_double_click();
+        enqueue(JOB_RESET);
       } else if (ev == BTN_LONG_START) {
         if (mic_record_start()) {
           state = ST_RECORDING;
@@ -180,17 +272,6 @@ void loop() {
         } else {
           hud_error("mic start failed");
         }
-      }
-      // Previews are optional traffic: never start one while the button is
-      // held or a gesture is mid-flight, because the blocking POST would
-      // swallow the next edges (a double click would decay into a single
-      // click). This narrows, but does not close, the window where a click
-      // lands during an in-flight request; the full fix is moving HTTP to a
-      // worker task.
-      if (state == ST_SESSION && !buttons_busy() &&
-          millis() - last_preview_ms >= PREVIEW_INTERVAL_MS) {
-        last_preview_ms = millis();
-        send_preview();
       }
       break;
 
@@ -201,13 +282,30 @@ void loop() {
         hud_rec(mic_record_seconds(), mic_record_full());
       }
       if (ev == BTN_LONG_RELEASE) {
-        handle_ask();
+        uint8_t* wav = nullptr;
+        const size_t len = mic_record_stop(&wav);
+        if (len == 0 || wav == nullptr) {
+          hud_error("no audio captured");
+          state = ST_IDLE;
+        } else {
+          state = ST_WAITING;
+          hud_thinking();
+          enqueue(JOB_ASK, wav, len);
+        }
       }
       break;
 
     case ST_WAITING:
-      // Unreachable steady state; see handle_ask().
-      state = ST_IDLE;
+      // The ask runs on the worker; a double click can still bail out.
+      if (ev == BTN_DOUBLE) {
+        enqueue(JOB_RESET);
+      }
       break;
   }
+
+  NetResultMsg msg;
+  while (xQueueReceive(q_results, &msg, 0) == pdTRUE) {
+    apply_result(msg);
+  }
+  delay(1);
 }
