@@ -45,24 +45,37 @@ def generate_target(path: str | Path, size: int = 900) -> Path:
     return path
 
 
+_last_hit_dict: int | None = None
+
+
 def _detect_any(gray: np.ndarray) -> np.ndarray | None:
-    """Largest fiducial quad (pixel corners) from any accepted family."""
-    best: np.ndarray | None = None
-    best_side = 0.0
+    """Largest fiducial quad (pixel corners) from the first family that
+    matches. The last successful dictionary is tried first and the scan stops
+    on a hit - one physical marker is in play, so cross-family comparison
+    buys nothing and the preview stream calls this at 2-3 fps."""
+    global _last_hit_dict
     params = cv2.aruco.DetectorParameters()
-    for dict_id in _ACCEPTED_DICTS:
+    order = list(_ACCEPTED_DICTS)
+    if _last_hit_dict in order:
+        order.remove(_last_hit_dict)
+        order.insert(0, _last_hit_dict)
+    for dict_id in order:
         detector = cv2.aruco.ArucoDetector(
             cv2.aruco.getPredefinedDictionary(dict_id), params
         )
         corners, ids, _ = detector.detectMarkers(gray)
         if ids is None:
             continue
+        best: np.ndarray | None = None
+        best_side = 0.0
         for marker_corners in corners:
             quad = marker_corners.reshape(-1, 2)
             side = float(max(np.linalg.norm(quad[i] - quad[(i + 1) % 4]) for i in range(4)))
             if side > best_side:
                 best, best_side = quad, side
-    return best
+        _last_hit_dict = dict_id
+        return best
+    return None
 
 
 def detect_target(

@@ -304,3 +304,89 @@ def test_too_close_marker_rejected(rig):
     huge = glasses.capture(_frame_with_marker(0.5, 0.5, size=260))  # 260/640 > 0.35
     assert any("further" in t for t in _texts(huge.scene))
     assert _session(app)._calib.idx == 0
+
+
+def test_voice_cancel_of_calibration_fully_deactivates(rig):
+    """Regression: 'cancel' during calibration left active=True with zero
+    slides; a following 'repeat'/'back' crashed to an internal-error scene."""
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    off = glasses.ask(text="cancel")
+    assert not off.active
+    sess = _session(app)
+    assert sess._calib is None and not sess.active
+
+    polled = glasses.poll_scene(-1)
+    assert not polled.active, "GET /scene must agree the session ended"
+
+    for word in ("repeat", "back", "next"):
+        resp = glasses.ask(text=word)
+        assert not resp.active
+        assert not any("internal error" in t for t in _texts(resp.scene) if t)
+
+
+def test_stop_calibration_phrase_cancels_not_restarts(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    glasses.capture(_frame_with_marker(0.5, 0.5))
+    assert _session(app)._calib.idx == 1
+    off = glasses.ask(text="стоп калибровка")
+    assert not off.active
+    assert _session(app)._calib is None, "cancel must win over restart"
+
+
+def test_empty_transcript_during_calibration_keeps_crosshair(rig):
+    glasses, app = rig
+    glasses.ask(text="calibrate")
+    resp = glasses.ask(text="   ")
+    assert resp.active
+    assert any(e.t == "target" for e in resp.scene.els), "crosshair must survive"
+    assert any("didn't catch" in t for t in _texts(resp.scene))
+    assert _session(app)._calib is not None
+
+
+def test_punctuation_only_question_treated_as_silence(rig):
+    glasses, app = rig
+    called = []
+    planner = app.state.runtime.planner
+    original = planner.plan
+    planner.plan = lambda *a, **k: (called.append(1), original(*a, **k))[1]
+    glasses.capture(make_test_image())
+    resp = glasses.ask(text="?!.")
+    assert not called, "punctuation-only transcript must not reach the planner"
+    assert any("didn't catch" in t for t in _texts(resp.scene))
+    assert resp.session_id == ""
+
+
+def test_prompt_screen_auto_restores_slide(rig, monkeypatch):
+    glasses, app = rig
+    glasses.capture(make_test_image())
+    start = glasses.ask(text="find the phone here")
+    assert start.active
+
+    prompt = glasses.ask(text="and where is the charger for it")  # no photo buffered
+    assert prompt.active
+    assert any("no photo" in t for t in _texts(prompt.scene))
+
+    # Before the prompt deadline: previews keep the prompt.
+    kept = glasses.preview(make_test_image(), last_seq=prompt.scene.seq)
+    texts_now = _texts(kept.scene) if kept.scene else _texts(prompt.scene)
+    assert any("no photo" in t for t in texts_now)
+
+    # After the deadline the preview stream restores the slide.
+    sess = _session(app)
+    monkeypatch.setattr("lstk_eye.session.PROMPT_SECONDS", 0.0)
+    sess._prompt_until = 0.0
+    restored = glasses.preview(make_test_image(), last_seq=prompt.scene.seq)
+    assert restored.scene is not None
+    assert any(e.t == "target" for e in restored.scene.els), "slide must return"
+
+
+def test_reset_during_calibration_says_calibration_off(rig):
+    glasses, _ = rig
+    glasses.ask(text="calibrate")
+    done = glasses.reset()
+    assert not done.active
+    assert any("calibration off" in t for t in _texts(done.scene))
+    idle_done = glasses.reset()
+    assert any("done" in t for t in _texts(idle_done.scene))

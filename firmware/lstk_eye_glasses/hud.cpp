@@ -197,6 +197,11 @@ void hud_error(const char* msg) {
   display.setTextWrap(true);
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 24);
   display.print(msg);
+  // Local errors follow the same convention as server error scenes: the
+  // exit is always stated.
+  display.setTextWrap(false);
+  display.setCursor(HUD_PAD_X, 64 - HUD_PAD_Y - 8);
+  display.print("2click = reset");
   display.display();
 }
 

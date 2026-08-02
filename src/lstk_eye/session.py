@@ -27,7 +27,7 @@ from lstk_eye.calibration import WindowCalibration
 from lstk_eye.config import AppConfig, CalibrationConfig, save_calibration
 from lstk_eye.display import CHAR_W, SceneComposer
 from lstk_eye.errors import ConfigError, LstkError, PipelineError
-from lstk_eye.intents import is_calibration_request, match_intent
+from lstk_eye.intents import is_calibration_request, match_intent, normalize_words
 from lstk_eye.pipeline import factories
 from lstk_eye.pipeline.fiducial import annotate_detection, detect_target
 from lstk_eye.pipeline.interfaces import TargetTracker
@@ -51,6 +51,9 @@ ANCHOR_EPS = 0.012
 # Chat history kept per device (question/answer pairs); the planner sees the
 # most recent slice of it.
 MAX_HISTORY = 12
+# Transient prompts ("no photo", "didn't catch that") shown mid-session are
+# restored back to the slide by the preview stream after this long.
+PROMPT_SECONDS = 4.0
 
 
 # A photo whose decoded width is below this is not a capture (preview-sized
@@ -154,9 +157,15 @@ class DeviceSession:
         # Ongoing chat: (question, answer) pairs, cleared by reset.
         self._history: list[tuple[str, str]] = []
         self._calib: _CalibState | None = None
+        # When set, the current scene is a transient prompt over a live
+        # session; previews restore the slide after the deadline.
+        self._prompt_until: float | None = None
 
     def _decode(self, jpeg: bytes, gray: bool = False) -> np.ndarray:
         return _decode(jpeg, self._rt.cfg.camera.rotation, gray=gray)
+
+    def _restore_slide_after_prompt(self) -> None:
+        self._prompt_until = time.monotonic() + PROMPT_SECONDS
 
     # --- scene bookkeeping ---
 
@@ -189,7 +198,7 @@ class DeviceSession:
                 log.warning("rejected photo (undecodable or below %d px wide)", MIN_PHOTO_WIDTH)
                 count = len(self._photos)
                 if self.active:
-                    return PhotoAck(count=count, scene=self._badge_scene("[!]"))
+                    return PhotoAck(count=count, scene=self._badge_scene("[!photo]"))
                 scene = self._set_scene(
                     self._rt.composer.status("bad photo", self._next_seq(), "click again")
                 )
@@ -246,31 +255,39 @@ class DeviceSession:
 
     def _ask_locked(self, wav: bytes, text: str | None) -> AskResponse:
         question = text if text is not None else self._rt.stt.transcribe(wav).text
-        question = question.strip()
-        if not question:
-            scene = self._set_scene(
-                self._rt.composer.status("didn't catch that", self._next_seq(), "try again")
-            )
-            return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
+        # Punctuation- or emoji-only transcripts are as empty as silence.
+        empty = not question.strip() or not normalize_words(question)
 
-        # "calibrate" starts the camera->display calibration flow from any
-        # state; a voice command during calibration cancels it.
-        if is_calibration_request(question):
-            return self._start_calibration()
+        # Calibration owns the interaction while it is running: every
+        # utterance is handled here and nothing falls through into the chat
+        # pipeline. Cancel phrases win over everything ("stop calibration"
+        # must cancel, not restart).
         if self._calib is not None:
-            if match_intent(question) in ("cancel", "reset"):
+            if not empty and match_intent(question) == "cancel":
                 self._calib = None
+                self.active = False
                 scene = self._set_scene(
                     self._rt.composer.status("calibration off", self._next_seq())
                 )
                 return AskResponse(session_id=self.session_id, scene=scene, active=False)
-            # Any other utterance mid-calibration: stay in the flow and say
-            # how to leave it - never run the chat pipeline from here.
+            if not empty and is_calibration_request(question):
+                return self._start_calibration()  # restart from point 1
+            status = "didn't catch that" if empty else "busy: 2click exits"
             return AskResponse(
-                session_id=self.session_id,
-                scene=self._crosshair("busy: 2click exits"),
-                active=True,
+                session_id=self.session_id, scene=self._crosshair(status), active=True
             )
+
+        if empty:
+            scene = self._set_scene(
+                self._rt.composer.status("didn't catch that", self._next_seq(), "try again")
+            )
+            if self.active:
+                self._restore_slide_after_prompt()
+            return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
+
+        question = question.strip()
+        if is_calibration_request(question):
+            return self._start_calibration()
 
         # Voice commands during an active session ("back", "repeat", "cancel")
         # never start a new pipeline run.
@@ -292,11 +309,15 @@ class DeviceSession:
         if not fresh:
             # active must reflect the real session state: a follow-up question
             # without a fresh capture must not tell the device the session
-            # ended while the server keeps it alive ("repeat" restores the
-            # slide). See the protocol contract on the active flag.
+            # ended while the server keeps it alive. Distinguish "never
+            # clicked" from "clicked too long ago".
+            headline = "photos expired" if self._photos else "no photo"
             scene = self._set_scene(
-                self._rt.composer.status("no photo", self._next_seq(), "click to capture")
+                self._rt.composer.status(headline, self._next_seq(), "click, then ask")
             )
+            self._photos = []
+            if self.active:
+                self._restore_slide_after_prompt()
             return AskResponse(session_id=self.session_id, scene=scene, active=self.active)
 
         capture_jpeg = fresh[-1][0]
@@ -342,29 +363,49 @@ class DeviceSession:
 
     def event(self, event_type: str) -> SceneResponse:
         with self._lock:
-            return self._event_locked(event_type)
+            try:
+                return self._event_locked(event_type)
+            except Exception:
+                log.exception("unexpected error in event %s", event_type)
+                scene = self._set_scene(
+                    self._rt.composer.error("internal error", self._next_seq())
+                )
+                return SceneResponse(scene=scene, active=self.active)
 
     def _event_locked(self, event_type: str) -> SceneResponse:
         if event_type == "reset":
             # Double click: the chat is over - session, history, photo
-            # buffer, and any in-flight calibration all go.
+            # buffer, and any in-flight calibration all go. Aborting a
+            # calibration must not read like a successful one.
+            message = "calibration off" if self._calib is not None else "done"
             self._calib = None
             self._history = []
             self._photos = []
-            return SceneResponse(scene=self._finish("done"), active=False)
+            return SceneResponse(scene=self._finish(message), active=False)
         if self._calib is not None:
-            # Calibration owns the screen; only reset (above) and clicks
-            # (add_photo) mean anything.
+            if event_type == "cancel":
+                # Same exit as the voice cancel phrase.
+                self._calib = None
+                self.active = False
+                scene = self._set_scene(
+                    self._rt.composer.status("calibration off", self._next_seq())
+                )
+                return SceneResponse(scene=scene, active=False)
+            # Calibration owns the screen; other events are no-ops.
             return SceneResponse(scene=None, active=True)
         if not self.active:
             return SceneResponse(scene=None, active=False)
         if event_type == "next":
-            if self._step + 1 >= len(self._slides):
+            if not self._slides or self._step + 1 >= len(self._slides):
                 return SceneResponse(scene=self._finish("done"), active=False)
             return SceneResponse(scene=self._enter_step(self._step + 1), active=True)
         if event_type == "prev":
+            if not self._slides:
+                return SceneResponse(scene=self._finish("done"), active=False)
             return SceneResponse(scene=self._enter_step(max(0, self._step - 1)), active=True)
         if event_type == "repeat":
+            if not self._slides:
+                return SceneResponse(scene=self._finish("done"), active=False)
             slide = self._slides[self._step]
             scene = self._set_scene(
                 self._rt.composer.slide(
@@ -395,6 +436,21 @@ class DeviceSession:
                 return SceneResponse(scene=self._scene_if_newer(last_seq), active=True)
             if not self.active:
                 return SceneResponse(scene=self._scene_if_newer(last_seq), active=False)
+            if self._prompt_until is not None:
+                # A transient prompt owns the screen: hold tracker-driven
+                # redraws until the wearer has had time to read it, then
+                # bring the slide back.
+                if time.monotonic() < self._prompt_until:
+                    return SceneResponse(scene=self._scene_if_newer(last_seq), active=True)
+                self._prompt_until = None
+                if self._slides:
+                    slide = self._slides[self._step]
+                    self._set_scene(
+                        self._rt.composer.slide(
+                            slide, self._next_seq(), self._anchored, self._anchor,
+                            style=self._style,
+                        )
+                    )
             if self._tracker is not None:
                 try:
                     self._update_anchor(jpeg)
@@ -472,11 +528,15 @@ class DeviceSession:
         comp = self._rt.composer
         cx, cy = comp.center
         points = [(cx, cy), (comp.x1 - 6, cy), (cx, comp.y0 + 6)]
+        was_chatting = self.active and bool(self._slides)
         self._calib = _CalibState(points)
+        if was_chatting:
+            self._calib.status = "chat ended"
         self._slides = []
         self._mask_by_id = {}
         self._tracker = None
         self._capture_bgr = None
+        self._prompt_until = None
         self.active = True
         scene = self._set_scene(
             comp.calibration_point(

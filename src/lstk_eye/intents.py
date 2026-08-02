@@ -53,3 +53,9 @@ def is_calibration_request(text: str) -> bool:
     if not words or len(words) > _MAX_COMMAND_WORDS:
         return False
     return any(w.startswith(("calibrat", "калибр", "откалибр")) for w in words)
+
+
+def normalize_words(text: str) -> list[str]:
+    """Public wrapper: lowercase, strip punctuation, split into words. Empty
+    result means the utterance carries no content (silence, emoji, noise)."""
+    return _normalize(text)
