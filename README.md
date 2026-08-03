@@ -10,8 +10,14 @@ three slides: arrow at the VΩmA jack ("red probe here"), arrow at COM ("black p
 here"), arrow at the dial ("set V⎓ 20"). Double-click to advance as you complete
 each step.
 
-> Status: early development. Software runs end-to-end against a device simulator;
-> hardware bring-up is in progress.
+## Demo
+
+[![Through-the-HUD view: tracking brackets and label locked onto a tulip by voice prompt](docs/media/demo-thumb.jpg)](https://vimeo.com/1215056055)
+
+**[▶ Watch the demo (Vimeo, 43 s)](https://vimeo.com/1215056055)**
+
+> Status: working prototype — the demo above is the real device. Early
+> development; expect rough edges.
 
 ## How it works
 
