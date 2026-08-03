@@ -72,7 +72,7 @@ assembly method — dielectric, reversible with isopropyl.
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/) (or plain pip).
 
 ```bash
-git clone https://github.com/lstk-eye/lstk-eye
+git clone https://github.com/Artod/lstk-eye
 cd lstk-eye
 uv sync
 ```
