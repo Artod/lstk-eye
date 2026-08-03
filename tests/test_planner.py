@@ -8,6 +8,7 @@ import base64
 import json
 import re
 import subprocess
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -289,9 +290,6 @@ def test_claude_cli_missing_binary_raises(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(PlanningError, match="not found"):
         cli_planner().plan(PNG, QUESTION, [make_mask(1, 0.1)])
-
-
-import types
 
 
 class _FakeParse:

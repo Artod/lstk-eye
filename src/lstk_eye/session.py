@@ -701,8 +701,11 @@ class DeviceSession:
                 note = "save failed"
         if abs(cal.window_w) > 1.0 or abs(cal.window_h) > 1.0:
             log.warning("calibration window suspiciously large - verify camera.rotation")
+        # Calibration is live in RAM either way; a persistence problem must
+        # reach the wearer (it silently vanishes on reboot otherwise).
+        hint = "hold btn + ask" if note == "saved" else note
         return self._set_scene(
-            self._rt.composer.status("calibrated", self._next_seq(), "hold btn + ask")
+            self._rt.composer.status("calibrated", self._next_seq(), hint)
         )
 
     def _answer_locate(self, question: str, capture, capture_jpeg: bytes, loc) -> AskResponse:

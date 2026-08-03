@@ -203,6 +203,6 @@ def test_flat_impostor_rejected_by_edge_check(cfg, rng):
     flat = _background(PREVIEW_W, PREVIEW_H, rng)
     ph, pw = int(0.2 * PREVIEW_H), int(0.2 * PREVIEW_W)
     flat[20 : 20 + ph, 30 : 30 + pw] = 200
-    for i in range(cfg.miss_hide):
+    for _ in range(cfg.miss_hide):
         res = tracker.update(flat)
     assert not res.found, "flat impostor kept the target visible"

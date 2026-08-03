@@ -11,6 +11,7 @@ from faster_whisper import WhisperModel
 
 from lstk_eye.audio import resample_linear, wav_to_float32
 from lstk_eye.config import SttConfig
+from lstk_eye.errors import PipelineError
 from lstk_eye.pipeline.interfaces import SpeechToText
 from lstk_eye.pipeline.types import Transcript
 
