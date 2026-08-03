@@ -212,9 +212,27 @@ bool hud_begin(bool mirrored) {
   return true;
 }
 
+// Bold L-brackets at the physical panel corners, ignoring the visible-area
+// padding on purpose: they mark the true OLED extents so an external camera
+// (demo filming) can be framed against them. Shown on the boot screens only -
+// rebooting the device is the way to get this alignment grid.
+static void draw_align_corners() {
+  const int arm = 14, th = 3;
+  const int x1 = kWidth - 1, y1 = kHeight - 1;
+  display.fillRect(0, 0, arm, th, SSD1306_WHITE);
+  display.fillRect(0, 0, th, arm, SSD1306_WHITE);
+  display.fillRect(x1 - arm + 1, 0, arm, th, SSD1306_WHITE);
+  display.fillRect(x1 - th + 1, 0, th, arm, SSD1306_WHITE);
+  display.fillRect(0, y1 - th + 1, arm, th, SSD1306_WHITE);
+  display.fillRect(0, y1 - arm + 1, th, arm, SSD1306_WHITE);
+  display.fillRect(x1 - arm + 1, y1 - th + 1, arm, th, SSD1306_WHITE);
+  display.fillRect(x1 - th + 1, y1 - arm + 1, th, arm, SSD1306_WHITE);
+}
+
 void hud_splash(const char* version) {
   last_marker.has = false;
   frame_start();
+  draw_align_corners();
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 14);
   display.print("lstk-eye");
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 30);
@@ -226,6 +244,17 @@ void hud_splash(const char* version) {
 void hud_message(const char* line1, const char* line2) {
   last_marker.has = false;
   frame_start();
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
+  display.print(line1);
+  display.setCursor(HUD_PAD_X, HUD_PAD_Y + 24);
+  display.print(line2);
+  display.display();
+}
+
+void hud_boot_align(const char* line1, const char* line2) {
+  last_marker.has = false;
+  frame_start();
+  draw_align_corners();
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 8);
   display.print(line1);
   display.setCursor(HUD_PAD_X, HUD_PAD_Y + 24);

@@ -15,6 +15,9 @@ bool hud_begin(bool mirrored);
 // Local screens (not server-driven).
 void hud_splash(const char* version);
 void hud_message(const char* line1, const char* line2);
+// Message plus bold corner brackets at the physical panel corners (no
+// padding) - camera-alignment grid for demo filming, shown on boot screens.
+void hud_boot_align(const char* line1, const char* line2);
 void hud_rec(uint32_t seconds, bool capped);
 void hud_thinking();
 void hud_error(const char* msg);

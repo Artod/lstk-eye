@@ -71,7 +71,9 @@ static String api_with_seq(const char* path) {
 }
 
 static void wifi_status(const char* msg) {
-  hud_message("WiFi", msg);
+  // Boot-time screens carry the corner alignment grid: rebooting the device
+  // is the no-reflash way to frame an external camera for demo shots.
+  hud_boot_align("WiFi", msg);
 }
 
 // --- worker task (core 0): all camera captures and HTTP ---
@@ -266,7 +268,7 @@ void loop() {
     if (!online && state != ST_RECORDING) {
       hud_message("WiFi down", "retrying in bg");
     } else if (online && state == ST_IDLE) {
-      hud_message("WiFi", "connected");
+      hud_boot_align("WiFi", "connected");
     }
   }
 
